@@ -307,6 +307,14 @@ IDs are extracted from headline properties."
     (insert (org-link-make-string (concat "id:" id) desc))
     (run-hook-with-args 'org-roam-post-node-insert-hook id desc)))
 
+(defun org-roam-fztl-node-find ()
+  "Find and open folgezettel outline note."
+  (interactive)
+  (org-roam-node-find nil nil
+                      (lambda (node)
+                        (assoc (org-roam-node-id node)
+                               org-roam-fztl-outline-notes))))
+
 ;;; Minor Mode Configuration
 
 (defun org-roam-fztl-mode--activate ()
