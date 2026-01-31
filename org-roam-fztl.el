@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.3.1
+;; Version: 0.3.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -146,7 +146,6 @@ specifying whether KEY is ID or FZ.")
 (defun org-roam-fztl--mapping-put (id fz outline-id)
   "Put relation between ID and FZ into mapping storage.
 OUTLINE-ID is the ID of outline node."
-  ;; (puthash `(id ,id) `(,fz ,outline-id) org-roam-fztl--mapping)
   (let ((key `(id ,id))
         (value (cons outline-id fz)))
     (if-let* ((items (gethash key org-roam-fztl--mapping)))
@@ -163,7 +162,7 @@ OUTLINE-ID is the ID of outline node."
 
 (defun org-roam-fztl--mapping-fz2id-get (fz)
   "Get ID for FZ from mapping storage."
-  (when-let* ((v (gethash `('fz ,fz) org-roam-fztl--mapping)))
+  (when-let* ((v (gethash `(fz ,fz) org-roam-fztl--mapping)))
     (car v)))
 
 (defun org-roam-fztl--mapping-id2fz-get (id)
@@ -253,7 +252,7 @@ OUTLINE-ID is the ID of outline node."
                (format org-roam-fztl-overlay-fz-format
                        (org-roam-fztl-fz--render fz)))
              fzs)
-     " ")))
+     "")))
 
 (defun org-roam-fztl-overlay--in-title ()
   "Put folgezettel overlays in node title."
@@ -331,10 +330,12 @@ IDs are extracted from headline properties."
   "Perform operation of TYPE on folgezettel nodes.
 The function FILTER-FN takes a folgezettel and returns related folgezettels."
   (if (org-roam-fztl-node-has-fz-p)
-      (if-let* ((ids (mapcar (lambda (fz) (org-roam-fztl-fz--to-id fz))
-                             (flatten-tree
-                              (mapcar (lambda (fz) (funcall filter-fn fz))
-                                      (org-roam-fztl-fz--from-id))))))
+      (if-let* ((ids (mapcar
+                      (lambda (fz) (org-roam-fztl-fz--to-id fz))
+                      (apply #'append
+                             (mapcar
+                              (lambda (fz) (funcall filter-fn fz))
+                              (org-roam-fztl-fz--from-id))))))
           (pcase type
             ('find
              (org-roam-node-find nil nil
@@ -404,10 +405,14 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   ;; (add-hook 'window-configuration-change-hook #'org-roam-fztl--overlay-refresh 99 t)
   (add-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh 99 t)
   (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
-  (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t))
+  (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
+
+  (global-set-key (kbd org-roam-fztl-prefix) org-roam-fztl-mode-map))
 
 (defun org-roam-fztl-mode--deactivate ()
   "Deactivate `org-roam-fztl-mode'."
+  (global-unset-key (kbd org-roam-fztl-prefix))
+
   (remove-hook 'after-save-hook #'org-roam-fztl-overlay--refresh t)
   (remove-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node t)
   (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t))
@@ -417,28 +422,23 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   :type 'string
   :group 'org-roam-fztl)
 
-(defvar org-roam-fztl-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "a") #'org-roam-fztl-node-find)
-    (define-key map (kbd "c") #'org-roam-fztl-node-find-children)
-    (define-key map (kbd "p") #'org-roam-fztl-node-find-parents)
-    (define-key map (kbd "s") #'org-roam-fztl-node-find-siblings)
-    (define-key map (kbd "i c") #'org-roam-fztl-node-insert-child)
-    (define-key map (kbd "i p") #'org-roam-fztl-node-insert-parent)
-    (define-key map (kbd "i s") #'org-roam-fztl-node-insert-sibling)
-    (define-key map (kbd "o") #'org-roam-fztl-node-jump-to-outline)
-    map)
-  "Keymap for `org-roam-fztl-mode' commands.")
+(defvar-keymap org-roam-fztl-mode-map
+  :doc "Keymap for `org-roam-fztl-mode'."
+  "a" #'org-roam-fztl-node-find
+  "c" #'org-roam-fztl-node-find-children
+  "p" #'org-roam-fztl-node-find-parents
+  "s" #'org-roam-fztl-node-find-siblings
+  "i c" #'org-roam-fztl-node-insert-child
+  "i p" #'org-roam-fztl-node-insert-parent
+  "i s" #'org-roam-fztl-node-insert-sibling
+  "o" #'org-roam-fztl-node-jump-to-outline)
 
 ;;;###autoload
 (define-minor-mode org-roam-fztl-mode
   "Minor mode for folgezettel support in Org Roam."
   :lighter " fztl"
   :group 'org-roam
-  :keymap (let ((map (make-sparse-keymap)))
-            (define-key map (kbd org-roam-fztl-prefix)
-                        org-roam-fztl-mode-map)
-            map)
+  :keymap org-roam-fztl-mode-map
   (if org-roam-fztl-mode
       (org-roam-fztl-mode--activate)
     (org-roam-fztl-mode--deactivate)))
