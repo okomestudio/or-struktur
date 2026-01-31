@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.2.1
+;; Version: 0.3.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -84,7 +84,7 @@ The preset format is set with `org-roam-fztl-fz-format'."
 
 (defun org-roam-fztl-fz--resize (fz n &optional initval)
   "Resize folgezettel FZ to N digits.
-If given, fill new digit with INITVAL (defaults to zero)."
+If given, fill new digit(s) with INITVAL (defaults to zero)."
   (let ((initval (or initval 0))
         (m (length fz)))
     (cond ((< n m) (seq-take fz n))
@@ -97,20 +97,20 @@ If given, fill new digit with INITVAL (defaults to zero)."
     (setcar (nthcdr lsd fz) (1+ (nth lsd fz)))))
 
 (defun org-roam-fztl-fz--from-id (&optional id)
-  "Get folgezettel from ID.
+  "Get folgezettels from ID.
 If not given, ID defaults to the ID of current node."
-  (org-roam-fztl--mapping-get 'id (or id (org-roam-id-at-point))))
+  (org-roam-fztl--mapping-id2fz-get (or id (org-roam-id-at-point))))
 
 (defun org-roam-fztl-fz--to-id (fz)
-  "TBD."
-  (org-roam-fztl--mapping-get 'fz fz))
+  "Get ID for folgezettel FZ."
+  (org-roam-fztl--mapping-fz2id-get fz))
 
 (defun org-roam-fztl-fz--get-children (fz)
   "Get child folgezettel from FZ."
   (let* ((fz (copy-sequence fz))
          (fz-child (org-roam-fztl-fz--resize fz (1+ (length fz)) 1))
          result)
-    (while (org-roam-fztl--mapping-get 'fz fz-child)
+    (while (org-roam-fztl--mapping-fz2id-get fz-child)
       (push (copy-sequence fz-child) result)
       (org-roam-fztl-fz--lsd-inc fz-child))
     result))
@@ -134,51 +134,62 @@ Each mapping entry is `(TYPE KEY)' as key and VALUE. This holds mapping both
 from ID to FZ and the reverse, FZ to ID. TYPE is a symbol (either `id' or `fz')
 specifying whether KEY is ID or FZ.")
 
-(defun org-roam-fztl--mapping-put (id fz outline-id)
-  "Put relation between ID and FZ into mapping storage.
-OUTLINE-ID is the ID of outline node."
-  (puthash `(id ,id) `(,fz ,outline-id) org-roam-fztl--mapping)
-  (puthash `(fz ,fz) `(,id ,outline-id) org-roam-fztl--mapping))
-
-(defun org-roam-fztl--mapping-get (type id)
-  "Get ID of TYPE (as symbol) from mapping storage.
-TYPE is either `id' or `fz'."
-  (when-let* ((value (gethash `(,type ,id) org-roam-fztl--mapping)))
-    (pcase-let ((`(,id ,outline-id) value))
-      id)))
-
-(defun org-roam-fztl--mapping-remove (id fz)
-  "Remove relation between ID and FZ from mapping storage."
-  (remhash `(id ,id) org-roam-fztl--mapping)
-  (remhash `(fz ,fz) org-roam-fztl--mapping))
-
 (defun org-roam-fztl--mapping-empty-p ()
   "Return non-nil if mapping storage is empty."
   (= (hash-table-count org-roam-fztl--mapping) 0))
 
 (defun org-roam-fztl--mapping-clear ()
   "Empty mapping storage."
+  (interactive)
   (clrhash org-roam-fztl--mapping))
+
+(defun org-roam-fztl--mapping-put (id fz outline-id)
+  "Put relation between ID and FZ into mapping storage.
+OUTLINE-ID is the ID of outline node."
+  ;; (puthash `(id ,id) `(,fz ,outline-id) org-roam-fztl--mapping)
+  (let ((key `(id ,id))
+        (value (cons outline-id fz)))
+    (if-let* ((items (gethash key org-roam-fztl--mapping)))
+        (progn
+          (setf (alist-get outline-id items nil nil #'equal) fz)
+          (puthash key items org-roam-fztl--mapping))
+      (puthash key (list value) org-roam-fztl--mapping)))
+  (puthash `(fz ,fz) (cons id outline-id) org-roam-fztl--mapping))
+
+(defun org-roam-fztl--mapping-remove (id fz)
+  "Remove relation between ID and FZ from mapping storage."
+  (remhash `(id ,id) org-roam-fztl--mapping)
+  (remhash `(fz ,fz) org-roam-fztl--mapping))
+
+(defun org-roam-fztl--mapping-fz2id-get (fz)
+  "Get ID for FZ from mapping storage."
+  (when-let* ((v (gethash `('fz ,fz) org-roam-fztl--mapping)))
+    (car v)))
+
+(defun org-roam-fztl--mapping-id2fz-get (id)
+  "Get all folgezettels associated with ID from mapping storage."
+  (when-let* ((vs (gethash `(id ,id) org-roam-fztl--mapping)))
+    (mapcar (lambda (v) (cdr v)) vs)))
 
 (defun org-roam-fztl--mapping-init ()
   "Fill mapping storage from all outline nodes."
   (clrhash org-roam-fztl--mapping)
-  (dolist (each org-roam-fztl-outline-nodes)
-    (pcase-let ((`(,id . ,start) each))
-      (with-current-buffer
-          (find-file-noselect (org-roam-node-file (org-roam-node-from-id id)))
-        (org-roam-fztl--mapping-from-outline-node)))))
+  (pcase-dolist (`(,id . ,start) org-roam-fztl-outline-nodes)
+    (with-current-buffer
+        (find-file-noselect (org-roam-node-file (org-roam-node-from-id id)))
+      (org-roam-fztl--mapping-from-outline-node))))
 
 (defun org-roam-fztl--mapping-from-outline-node ()
   "Parse current outline buffer to update mapping storage."
   (when-let* ((outline-id (org-roam-node-id (org-roam-node-at-point)))
               (start (cdr (assoc outline-id org-roam-fztl-outline-nodes))))
-    (let ((stage (make-hash-table :test #'equal)) fz)
-      (maphash (lambda (key value)
-                 (pcase-let ((`(,type ,id) key)
-                             (`(,fz ,oid) value))
-                   (when (and (string= oid outline-id)
-                              (eq type 'id))
+    (let ((stage (make-hash-table :test #'equal))
+          (fz `(,start)))
+      ;; Stage existing ID-folgezettel mapping.
+      (maphash (lambda (k v)
+                 (pcase-let ((`(,type ,id) k))
+                   (when-let* ((_ (eq type 'id))
+                               (fz (alist-get outline-id v nil nil #'equal)))
                      (puthash id fz stage))))
                org-roam-fztl--mapping)
 
@@ -191,17 +202,18 @@ TYPE is either `id' or `fz'."
                 (link-type (and link (org-element-property :type link)))
                 (link-path (and link (org-element-property :path link)))
                 (id (and (equal link-type "id") link-path)))
-           (setq fz (org-roam-fztl-fz--resize fz level start))
+           (setq fz (org-roam-fztl-fz--resize fz level))
            (org-roam-fztl-fz--lsd-inc fz)
 
            (when id
-             (if-let* ((val-stage (gethash id stage)))
+             (if-let* ((v-stage (gethash id stage)))
                  (progn
-                   (when (not (equal fz val-stage))
+                   (when (not (equal fz v-stage))
                      (org-roam-fztl--mapping-put id (copy-sequence fz) outline-id))
                    (remhash id stage))
                (org-roam-fztl--mapping-put id (copy-sequence fz) outline-id))))))
 
+      ;; Remove staged entries that no longer exist.
       (maphash (lambda (id fz) (org-roam-fztl--mapping-remove id fz)) stage))))
 
 ;;; Overlay Management
@@ -235,9 +247,13 @@ TYPE is either `id' or `fz'."
 
 (defun org-roam-fztl-overlay--format (id)
   "Render folgezettel from ID for overlay."
-  (if-let* ((fz (org-roam-fztl--mapping-get 'id id))
-            (styled-fz (org-roam-fztl-fz--render fz)))
-      (format org-roam-fztl-overlay-fz-format styled-fz)))
+  (when-let* ((fzs (org-roam-fztl--mapping-id2fz-get id)))
+    (string-join
+     (mapcar (lambda (fz)
+               (format org-roam-fztl-overlay-fz-format
+                       (org-roam-fztl-fz--render fz)))
+             fzs)
+     " ")))
 
 (defun org-roam-fztl-overlay--in-title ()
   "Put folgezettel overlays in node title."
@@ -313,10 +329,12 @@ IDs are extracted from headline properties."
 
 (defun org-roam-fztl-node--op (type filter-fn)
   "Perform operation of TYPE on folgezettel nodes.
-The function FILTER-FN defines the getter function for membership test."
+The function FILTER-FN takes a folgezettel and returns related folgezettels."
   (if (org-roam-fztl-node-has-fz-p)
       (if-let* ((ids (mapcar (lambda (fz) (org-roam-fztl-fz--to-id fz))
-                             (funcall filter-fn (org-roam-fztl-fz--from-id)))))
+                             (flatten-tree
+                              (mapcar (lambda (fz) (funcall filter-fn fz))
+                                      (org-roam-fztl-fz--from-id))))))
           (pcase type
             ('find
              (org-roam-node-find nil nil
