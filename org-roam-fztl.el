@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.3.2
+;; Version: 0.4.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -128,6 +128,9 @@ If not given, ID defaults to the ID of current node."
 
 ;;; Mapping Storage for ID-Folgezettel Relations
 
+;; NOTE: The storage uses a hash table as a proof-of-concept implementation. For
+;; scalability, consider using a relational database, e.g., SQLite.
+
 (defvar org-roam-fztl--mapping (make-hash-table :test #'equal)
   "Mapping storage.
 Each mapping entry is `(TYPE KEY)' as key and VALUE. This holds mapping both
@@ -143,21 +146,35 @@ specifying whether KEY is ID or FZ.")
   (interactive)
   (clrhash org-roam-fztl--mapping))
 
-(defun org-roam-fztl--mapping-put (id fz outline-id)
+(defun org-roam-fztl--mapping-put (id fz outline-id pos)
   "Put relation between ID and FZ into mapping storage.
-OUTLINE-ID is the ID of outline node."
-  (let ((key `(id ,id))
-        (value (cons outline-id fz)))
-    (if-let* ((items (gethash key org-roam-fztl--mapping)))
-        (progn
-          (setf (alist-get outline-id items nil nil #'equal) fz)
-          (puthash key items org-roam-fztl--mapping))
-      (puthash key (list value) org-roam-fztl--mapping)))
-  (puthash `(fz ,fz) (cons id outline-id) org-roam-fztl--mapping))
+OUTLINE-ID is the ID of outline node. POS is the outline node position."
+  (let* ((fz (copy-sequence fz))
+         (key `(id ,id))
+         (value (cons outline-id (list (cons fz pos)))))
+    (if-let* ((vs (gethash key org-roam-fztl--mapping)))
+        (let ((fz-pos-items (alist-get outline-id vs nil nil #'equal)))
+          (setf (alist-get fz fz-pos-items nil nil #'equal) (cons fz pos))
+          (setf (alist-get outline-id vs nil nil #'equal) fz-pos-items)
+          (puthash key vs org-roam-fztl--mapping))
+      (puthash key (list value) org-roam-fztl--mapping))
+    (puthash `(fz ,fz) (cons id outline-id) org-roam-fztl--mapping)))
 
 (defun org-roam-fztl--mapping-remove (id fz)
   "Remove relation between ID and FZ from mapping storage."
-  (remhash `(id ,id) org-roam-fztl--mapping)
+  (when-let* ((vs (gethash `(id ,id) org-roam-fztl--mapping)))
+    (pcase-dolist (`(,outline-id . ,fz-pos-items) vs)
+      (let ((fz-pos-items-size (length fz-pos-items)))
+        (pcase-dolist (`(,-fz . ,pos) fz-pos-items)
+          (when (equal fz -fz)
+            (setq fz-pos-items (assoc-delete-all fz fz-pos-items #'equal))))
+        (if (= (length fz-pos-items) 0)
+            (setq vs (assoc-delete-all outline-id fz vs #'equal))
+          (if (/= (length fz-pos-items) fz-pos-items-size)
+              (setf (alist-get outline-id vs nil nil #'equal) fz-pos-items)))))
+    (if (= (length vs) 0)
+        (remhash `(id ,id) org-roam-fztl--mapping)
+      (puthash `(id ,id) vs org-roam-fztl--mapping)))
   (remhash `(fz ,fz) org-roam-fztl--mapping))
 
 (defun org-roam-fztl--mapping-fz2id-get (fz)
@@ -168,7 +185,11 @@ OUTLINE-ID is the ID of outline node."
 (defun org-roam-fztl--mapping-id2fz-get (id)
   "Get all folgezettels associated with ID from mapping storage."
   (when-let* ((vs (gethash `(id ,id) org-roam-fztl--mapping)))
-    (mapcar (lambda (v) (cdr v)) vs)))
+    (let (result)
+      (pcase-dolist (`(,outline-id . ,fz-pos-items) vs)
+        (pcase-dolist (`(,fz . ,pos) fz-pos-items)
+          (push fz result)))
+      result)))
 
 (defun org-roam-fztl--mapping-init ()
   "Fill mapping storage from all outline nodes."
@@ -185,12 +206,14 @@ OUTLINE-ID is the ID of outline node."
     (let ((stage (make-hash-table :test #'equal))
           (fz `(,start)))
       ;; Stage existing ID-folgezettel mapping.
-      (maphash (lambda (k v)
-                 (pcase-let ((`(,type ,id) k))
-                   (when-let* ((_ (eq type 'id))
-                               (fz (alist-get outline-id v nil nil #'equal)))
-                     (puthash id fz stage))))
-               org-roam-fztl--mapping)
+      (maphash
+       (lambda (k vs)
+         (pcase-let ((`(,type ,id) k))
+           (when-let* ((_ (eq type 'id))
+                       (fz-pos-items (alist-get outline-id vs nil nil #'equal)))
+             (pcase-dolist (`(,fz . ,pos) fz-pos-items)
+               (puthash (cons id fz) pos stage)))))
+       org-roam-fztl--mapping)
 
       (org-map-entries
        (lambda ()
@@ -198,6 +221,7 @@ OUTLINE-ID is the ID of outline node."
                 (raw-title (org-get-heading t t t t))
                 (parsed (org-element-parse-secondary-string raw-title '(link)))
                 (link (org-element-map parsed 'link #'identity nil t))
+                (link-pos (and link (org-element-property :begin link)))
                 (link-type (and link (org-element-property :type link)))
                 (link-path (and link (org-element-property :path link)))
                 (id (and (equal link-type "id") link-path)))
@@ -205,15 +229,15 @@ OUTLINE-ID is the ID of outline node."
            (org-roam-fztl-fz--lsd-inc fz)
 
            (when id
-             (if-let* ((v-stage (gethash id stage)))
-                 (progn
-                   (when (not (equal fz v-stage))
-                     (org-roam-fztl--mapping-put id (copy-sequence fz) outline-id))
-                   (remhash id stage))
-               (org-roam-fztl--mapping-put id (copy-sequence fz) outline-id))))))
+             (if-let* ((_ (gethash (cons id fz) stage)))
+                 (remhash (cons id fz) stage)
+               (org-roam-fztl--mapping-put id fz outline-id link-pos))))))
 
       ;; Remove staged entries that no longer exist.
-      (maphash (lambda (id fz) (org-roam-fztl--mapping-remove id fz)) stage))))
+      (maphash (lambda (key _)
+                 (pcase-let* ((`(,id . ,fz) key))
+                   (org-roam-fztl--mapping-remove id fz)))
+               stage))))
 
 ;;; Overlay Management
 
