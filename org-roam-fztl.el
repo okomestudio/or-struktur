@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.6.1
+;; Version: 0.7.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -44,16 +44,22 @@
   :type 'string
   :group 'org-roam-fztl)
 
+(defun org-roam-fztl-outline-p (&optional node)
+  "Return non-nil if NODE is folgezettel outline."
+  (when-let* ((node (or node (org-roam-node-at-point))))
+    (member org-roam-fztl-outline-tag (org-roam-node-tags node))))
+
 (defun org-roam-fztl-outline-nodes ()
   "Get folgezettel outline nodes as alist.
 The returned alist has the node ID of folgezettel outline as key and folgezettel
 starting number as value."
   (seq-keep
    (lambda (node)
-     (when (member org-roam-fztl-outline-tag (org-roam-node-tags node))
-       (cons (org-roam-node-id node)
-             (string-to-number
-              (cdr (assoc "FZTL_START" (org-roam-node-properties node)))))))
+     (when-let*
+         ((id (and (org-roam-fztl-outline-p node) (org-roam-node-id node)))
+          (start (or (cdr (assoc "FZTL_START" (org-roam-node-properties node)))
+                     "0")))
+       (cons id (string-to-number start))))
    (org-roam-node-list)))
 
 (defcustom org-roam-fztl-outline-tags-exclude nil
@@ -86,6 +92,24 @@ On each headline, refresh is performed by `org-roam-fztl-outline-tags-refresh'."
   (save-excursion
     (goto-char (point-min))
     (org-map-entries #'org-roam-fztl-outline-tags-refresh)))
+
+(defun org-roam-fztl-outline-preview ()
+  "Open node linked in current headline."
+  (when-let* ((raw-title (org-get-heading t t t t))
+              (parsed (org-element-parse-secondary-string raw-title '(link)))
+              (link (org-element-map parsed 'link #'identity nil t))
+              (link-type (and link (org-element-property :type link)))
+              (link-path (and link (org-element-property :path link)))
+              (id (and (equal link-type "id") link-path))
+              (node (org-roam-node-from-id id)))
+    (display-buffer (find-file-noselect (org-roam-node-file node))
+                    '((display-buffer-use-some-window)
+                      (inhibit-same-window . t)))))
+
+(defun org-roam-fztl-outline-preview-async ()
+  "Async-open node linked in current headline."
+  (when (org-at-heading-p)
+    (run-with-idle-timer 0.05 nil #'org-roam-fztl-outline-preview)))
 
 ;;; Folgezettel Operations
 
@@ -490,6 +514,8 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   (add-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh 99 t)
   (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
   (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
+  (when (org-roam-fztl-outline-p)
+    (add-hook 'post-command-hook #'org-roam-fztl-outline-preview-async nil t))
 
   (keymap-local-set org-roam-fztl-prefix org-roam-fztl-prefix-map))
 
@@ -497,6 +523,7 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   "Deactivate `org-roam-fztl-mode'."
   (keymap-local-unset org-roam-fztl-prefix)
 
+  (remove-hook 'post-command-hook #'org-roam-fztl-outline-preview-async t)
   (remove-hook 'after-save-hook #'org-roam-fztl-overlay--refresh t)
   (remove-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node t)
   (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t))
