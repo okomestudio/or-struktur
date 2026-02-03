@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.5.1
+;; Version: 0.5.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -200,7 +200,7 @@ OUTLINE-ID is the ID of outline node. POS is the outline node position."
           (when (equal fz -fz)
             (setq fz-pos-items (assoc-delete-all fz fz-pos-items #'equal))))
         (if (= (length fz-pos-items) 0)
-            (setq vs (assoc-delete-all outline-id fz vs #'equal))
+            (setq vs (assoc-delete-all outline-id vs #'equal))
           (if (/= (length fz-pos-items) fz-pos-items-size)
               (setf (alist-get outline-id vs nil nil #'equal) fz-pos-items)))))
     (if (= (length vs) 0)
@@ -226,9 +226,11 @@ OUTLINE-ID is the ID of outline node. POS is the outline node position."
   "Fill mapping storage from all outline nodes."
   (clrhash org-roam-fztl--mapping)
   (pcase-dolist (`(,id . ,start) org-roam-fztl-outline-nodes)
-    (with-current-buffer
-        (find-file-noselect (org-roam-node-file (org-roam-node-from-id id)))
-      (org-roam-fztl--mapping-from-outline-node))))
+    (if-let* ((node (org-roam-node-from-id id)))
+        (with-current-buffer
+            (find-file-noselect (org-roam-node-file node))
+          (org-roam-fztl--mapping-from-outline-node))
+      (warn "Node with ID (%s) not found" id))))
 
 (defun org-roam-fztl--mapping-from-outline-node ()
   "Parse current outline buffer to update mapping storage."
@@ -370,9 +372,10 @@ IDs are extracted from headline properties."
 
 ;;; Nodes
 
-(defun org-roam-fztl-node-has-fz-p ()
-  "Return non-nil if node at point is folgezettel."
-  (and (org-roam-fztl-fz--from-id) t))
+(defun org-roam-fztl-node-has-fz-p (&optional node)
+  "Return non-nil if NODE has folgezettel.
+If not given, NODE will be node at point."
+  (and (org-roam-fztl-fz--from-id (and node (org-roam-node-id node))) t))
 
 (defun org-roam-fztl-node-find ()
   "Find and open folgezettel node."
