@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.5.2
+;; Version: 0.6.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -38,13 +38,23 @@
 
 ;;; Outline Documents
 
-(defcustom org-roam-fztl-outline-nodes nil
-  "Folgezettel outline nodes.
-Each item in this list is a cons cell of the form `(NODE-ID . START)', where
-NODE-ID is the ID of node containing an Folgezettel outline, and START is the
-starting integer of Folgezettel sequence."
-  :type '(repeat cons)
+(defcustom org-roam-fztl-outline-tag "fztl"
+  "Org tag for folgezettel outline node.
+`org-roam-fztl' treats nodes given this tag as a folgezettel outline node."
+  :type 'string
   :group 'org-roam-fztl)
+
+(defun org-roam-fztl-outline-nodes ()
+  "Get folgezettel outline nodes as alist.
+The returned alist has the node ID of folgezettel outline as key and folgezettel
+starting number as value."
+  (seq-keep
+   (lambda (node)
+     (when (member org-roam-fztl-outline-tag (org-roam-node-tags node))
+       (cons (org-roam-node-id node)
+             (string-to-number
+              (cdr (assoc "FZTL_START" (org-roam-node-properties node)))))))
+   (org-roam-node-list)))
 
 (defcustom org-roam-fztl-outline-tags-exclude nil
   "Tags to exclude from outlines."
@@ -225,7 +235,7 @@ OUTLINE-ID is the ID of outline node. POS is the outline node position."
 (defun org-roam-fztl--mapping-init ()
   "Fill mapping storage from all outline nodes."
   (clrhash org-roam-fztl--mapping)
-  (pcase-dolist (`(,id . ,start) org-roam-fztl-outline-nodes)
+  (pcase-dolist (`(,id . ,start) (org-roam-fztl-outline-nodes))
     (if-let* ((node (org-roam-node-from-id id)))
         (with-current-buffer
             (find-file-noselect (org-roam-node-file node))
@@ -235,7 +245,7 @@ OUTLINE-ID is the ID of outline node. POS is the outline node position."
 (defun org-roam-fztl--mapping-from-outline-node ()
   "Parse current outline buffer to update mapping storage."
   (when-let* ((outline-id (org-roam-node-id (org-roam-node-at-point)))
-              (start (cdr (assoc outline-id org-roam-fztl-outline-nodes))))
+              (start (cdr (assoc outline-id (org-roam-fztl-outline-nodes)))))
     (let ((stage (make-hash-table :test #'equal))
           (fz `(,start)))
       ;; Stage existing ID-folgezettel mapping.
@@ -443,7 +453,7 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
     (when-let*
         ((result
           (catch 'done
-            (pcase-dolist (`(,id . ,_) org-roam-fztl-outline-nodes)
+            (pcase-dolist (`(,id . ,_) (org-roam-fztl-outline-nodes))
               (when-let* ((node (org-roam-node-from-id id)))
                 (with-current-buffer
                     (find-file-noselect (org-roam-node-file node))
