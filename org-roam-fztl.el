@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.4.2
+;; Version: 0.5.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -45,6 +45,37 @@ NODE-ID is the ID of node containing an Folgezettel outline, and START is the
 starting integer of Folgezettel sequence."
   :type '(repeat cons)
   :group 'org-roam-fztl)
+
+(defcustom org-roam-fztl-outline-tags-exclude nil
+  "Tags to exclude from outlines."
+  :type '(repeat string)
+  :group 'org-roam-fztl)
+
+(defun org-roam-fztl-outline-tags-refresh ()
+  "Refresh tags in headline at point in outline node.
+Use `org-roam-fztl-outline-tags-exclude' to exclude tags from being added."
+  (interactive)
+  (when (not (org-at-heading-p))
+    (warn "Point not on Org headline"))
+  (let* ((raw-title (org-get-heading t t t t))
+         (parsed (org-element-parse-secondary-string raw-title '(link)))
+         (link (org-element-map parsed 'link #'identity nil t))
+         (link-type (and link (org-element-property :type link)))
+         (link-path (and link (org-element-property :path link)))
+         (id (and (equal link-type "id") link-path)))
+    (when-let* ((node (org-roam-node-from-id id))
+                (tags (cl-set-difference (org-roam-node-tags node)
+                                         org-roam-fztl-outline-tags-exclude
+                                         :test #'equal)))
+      (org-set-tags tags))))
+
+(defun org-roam-fztl-outline-tags-refresh-all ()
+  "Refresh tags in all headlines in outline node.
+On each headline, refresh is performed by `org-roam-fztl-outline-tags-refresh'."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (org-map-entries #'org-roam-fztl-outline-tags-refresh)))
 
 ;;; Folgezettel Operations
 
