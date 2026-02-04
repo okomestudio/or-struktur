@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.7.1
+;; Version: 0.7.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -110,6 +110,14 @@ On each headline, refresh is performed by `org-roam-fztl-outline-tags-refresh'."
   "Async-open node linked in current headline."
   (when (org-at-heading-p)
     (run-with-idle-timer 0.05 nil #'org-roam-fztl-outline-preview)))
+
+(defun org-roam-fztl-outline-preview-toggle ()
+  "Toggle outline preview."
+  (interactive)
+  (when (org-roam-fztl-outline-p)
+    (if (member #'org-roam-fztl-outline-preview-async post-command-hook)
+        (remove-hook 'post-command-hook #'org-roam-fztl-outline-preview-async t)
+      (add-hook 'post-command-hook #'org-roam-fztl-outline-preview-async nil t))))
 
 ;;; Folgezettel Operations
 
@@ -365,7 +373,7 @@ IDs are extracted from headline properties."
       (let* ((id (org-element-property :ID headline))
              (rendered (org-roam-fztl-overlay--format id)))
         (when rendered
-          (org-roam-fztl--overlay-put
+          (org-roam-fztl-overlay--put
            (+ (org-element-property :begin headline)
               (org-element-property :level headline)
               1)
@@ -506,7 +514,8 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   "i c" #'org-roam-fztl-node-insert-child
   "i p" #'org-roam-fztl-node-insert-parent
   "i s" #'org-roam-fztl-node-insert-sibling
-  "o" #'org-roam-fztl-node-jump-to-outline)
+  "o" #'org-roam-fztl-node-jump-to-outline
+  "v" #'org-roam-fztl-outline-preview-toggle)
 
 (defun org-roam-fztl-mode--activate ()
   "Activate `org-roam-fztl-mode'."
@@ -514,8 +523,6 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   (add-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh 99 t)
   (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
   (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
-  (when (org-roam-fztl-outline-p)
-    (add-hook 'post-command-hook #'org-roam-fztl-outline-preview-async nil t))
 
   (keymap-local-set org-roam-fztl-prefix org-roam-fztl-prefix-map))
 
@@ -523,7 +530,6 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   "Deactivate `org-roam-fztl-mode'."
   (keymap-local-unset org-roam-fztl-prefix)
 
-  (remove-hook 'post-command-hook #'org-roam-fztl-outline-preview-async t)
   (remove-hook 'after-save-hook #'org-roam-fztl-overlay--refresh t)
   (remove-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node t)
   (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t))
