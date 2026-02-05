@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.7.2
+;; Version: 0.8.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -29,6 +29,7 @@
 ;;
 ;;; Code:
 
+(require 'org)
 (require 'org-roam)
 
 (defgroup org-roam-fztl nil
@@ -506,7 +507,7 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   :group 'org-roam-fztl)
 
 (defvar-keymap org-roam-fztl-prefix-map
-  :doc "Keymap for `org-roam-fztl-mode'."
+  :doc "Keymap for `org-roam-fztl-minor-mode'."
   "a" #'org-roam-fztl-node-find
   "c" #'org-roam-fztl-node-find-children
   "p" #'org-roam-fztl-node-find-parents
@@ -514,24 +515,19 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   "i c" #'org-roam-fztl-node-insert-child
   "i p" #'org-roam-fztl-node-insert-parent
   "i s" #'org-roam-fztl-node-insert-sibling
-  "o" #'org-roam-fztl-node-jump-to-outline
-  "v" #'org-roam-fztl-outline-preview-toggle)
+  "o" #'org-roam-fztl-node-jump-to-outline)
+
+(keymap-set org-mode-map org-roam-fztl-prefix org-roam-fztl-prefix-map)
 
 (defun org-roam-fztl-mode--activate ()
   "Activate `org-roam-fztl-mode'."
   ;; (add-hook 'window-configuration-change-hook #'org-roam-fztl--overlay-refresh 99 t)
   (add-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh 99 t)
-  (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
-  (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
-
-  (keymap-local-set org-roam-fztl-prefix org-roam-fztl-prefix-map))
+  (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t))
 
 (defun org-roam-fztl-mode--deactivate ()
   "Deactivate `org-roam-fztl-mode'."
-  (keymap-local-unset org-roam-fztl-prefix)
-
   (remove-hook 'after-save-hook #'org-roam-fztl-overlay--refresh t)
-  (remove-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node t)
   (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t))
 
 ;;;###autoload
@@ -542,6 +538,42 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   (if org-roam-fztl-mode
       (org-roam-fztl-mode--activate)
     (org-roam-fztl-mode--deactivate)))
+
+;;; Major Mode
+
+(define-derived-mode org-roam-fztl-outline-mode org-mode "fztl/outline"
+  "Major mode for folgezettel outline mode."
+  (setq mode-name "fztl/outline")
+  (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
+  (use-local-map org-roam-fztl-outline-mode-map))
+
+(defvar org-roam-fztl-outline-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map org-mode-map)
+    map)
+  "Keymap for `org-roam-fztl-outline-mode'.")
+
+(defvar org-roam-fztl-outline-mode-prefix-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map (keymap-lookup org-mode-map org-roam-fztl-prefix))
+    map)
+  "Keymap for `org-roam-fztl-outline-mode'.")
+
+(define-key org-roam-fztl-outline-mode-prefix-map "v" #'org-roam-fztl-outline-preview-toggle)
+(define-key org-roam-fztl-outline-mode-map (kbd org-roam-fztl-prefix) org-roam-fztl-outline-mode-prefix-map)
+
+(defun org-roam-fztl-outline-mode--maybe-activate ()
+  "Activate `org-roam-fztl-outline-mode' if buffer is folgezettel outline."
+  (when (and (derived-mode-p 'org-mode)
+             (save-excursion
+               (goto-char (point-min))
+               (re-search-forward (format "^#\\+filetags?:.*\\<%s\\>"
+                                          org-roam-fztl-outline-tag)
+                                  nil t)))
+    (unless (derived-mode-p 'org-roam-fztl-outline-mode)
+      (org-roam-fztl-outline-mode))))
+
+(add-hook 'org-mode-hook #'org-roam-fztl-outline-mode--maybe-activate)
 
 (provide 'org-roam-fztl)
 ;;; org-roam-fztl.el ends here
