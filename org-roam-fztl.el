@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.8.3
+;; Version: 0.8.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -57,11 +57,8 @@ The returned alist has the node ID of folgezettel outline as key and folgezettel
 starting number as value."
   (seq-keep
    (lambda (node)
-     (when-let*
-         ((id (and (org-roam-fztl-outline-p node) (org-roam-node-id node)))
-          (start (or (cdr (assoc "FZTL_START" (org-roam-node-properties node)))
-                     "0")))
-       (cons id (string-to-number start))))
+     (when (org-roam-fztl-outline-p node)
+       (org-roam-node-id node)))
    (org-roam-node-list)))
 
 (defcustom org-roam-fztl-outline-tags-exclude nil
@@ -269,52 +266,64 @@ OUTLINE-ID is the ID of outline node. POS is the outline node position."
 (defun org-roam-fztl--mapping-init ()
   "Fill mapping storage from all outline nodes."
   (clrhash org-roam-fztl--mapping)
-  (pcase-dolist (`(,id . ,start) (org-roam-fztl-outline-nodes))
-    (if-let* ((node (org-roam-node-from-id id)))
-        (with-current-buffer
-            (find-file-noselect (org-roam-node-file node))
-          (org-roam-fztl--mapping-from-outline-node))
-      (warn "Node with ID (%s) not found" id))))
+  (dolist (id (org-roam-fztl-outline-nodes))
+    (let* ((node (org-roam-node-from-id id))
+           (buffer (find-file-noselect (org-roam-node-file node))))
+      (with-current-buffer buffer
+        (org-roam-fztl--mapping-from-outline-node id)
+        (org-roam-fztl-overlay--refresh)))))
 
-(defun org-roam-fztl--mapping-from-outline-node ()
+(defun org-roam-fztl--mapping-init-maybe ()
+  "If mapping storage is empty, initialize."
+  (when (org-roam-fztl--mapping-empty-p)
+    (org-roam-fztl--mapping-init)))
+
+;;; TODO(2026-02-05): Improve the algorithm by performing update on affected
+;;; tree.
+(defun org-roam-fztl--mapping-from-outline-node (&optional outline-id)
   "Parse current outline buffer to update mapping storage."
-  (when-let* ((outline-id (org-roam-node-id (org-roam-node-at-point)))
-              (start (cdr (assoc outline-id (org-roam-fztl-outline-nodes)))))
-    (let ((stage (make-hash-table :test #'equal))
-          (fz `(,start)))
-      ;; Stage existing ID-folgezettel mapping.
-      (maphash
-       (lambda (k vs)
-         (pcase-let ((`(,type ,id) k))
-           (when-let* ((_ (eq type 'id))
-                       (fz-pos-items (alist-get outline-id vs nil nil #'equal)))
-             (pcase-dolist (`(,fz . ,pos) fz-pos-items)
-               (puthash (cons id fz) pos stage)))))
-       org-roam-fztl--mapping)
+  (when-let*
+      ((node (or (and outline-id (org-roam-node-from-id outline-id))
+                 (save-excursion (goto-char (point-min))
+                                 (org-roam-node-at-point))))
+       (outline-id (and (org-roam-fztl-outline-p node)
+                        (org-roam-node-id node)))
+       (start (string-to-number
+               (or (cdr (assoc "FZTL_START" (org-roam-node-properties node)))
+                   "0")))
+       (stage (make-hash-table :test #'equal))
+       (fz `(,start)))
+    ;; Stage existing ID-folgezettel mapping.
+    (maphash
+     (lambda (k vs)
+       (pcase-let ((`(,type ,id) k))
+         (when-let* ((_ (eq type 'id))
+                     (fz-pos-items (alist-get outline-id vs nil nil #'equal)))
+           (pcase-dolist (`(,fz . ,pos) fz-pos-items)
+             (puthash (cons id fz) pos stage)))))
+     org-roam-fztl--mapping)
 
-      (org-map-entries
-       (lambda ()
-         (let* ((level (org-outline-level))
-                (raw-title (org-get-heading t t t t))
-                (parsed (org-element-parse-secondary-string raw-title '(link)))
-                (link (org-element-map parsed 'link #'identity nil t))
-                (link-pos (and link (org-element-property :begin link)))
-                (link-type (and link (org-element-property :type link)))
-                (link-path (and link (org-element-property :path link)))
-                (id (and (equal link-type "id") link-path)))
-           (setq fz (org-roam-fztl-fz--resize fz level))
-           (org-roam-fztl-fz--lsd-inc fz)
+    (org-element-map (org-element-parse-buffer) 'headline
+      (lambda (elmt)
+        (let ((level (org-element-property :level elmt)))
+          (setq fz (org-roam-fztl-fz--resize fz level))
+          (org-roam-fztl-fz--lsd-inc fz)
+          (when-let* ((lnk (org-element-map
+                               (org-element-property :title elmt)
+                               'link #'identity nil 'first-match))
+                      (type (org-element-property :type lnk))
+                      (id (and (equal type "id")
+                               (org-element-property :path lnk)))
+                      (pos (org-element-property :begin lnk)))
+            (when (gethash (cons id fz) stage)
+              (remhash (cons id fz) stage))
+            (org-roam-fztl--mapping-put id fz outline-id pos)))))
 
-           (when id
-             (if-let* ((_ (gethash (cons id fz) stage)))
-                 (remhash (cons id fz) stage)
-               (org-roam-fztl--mapping-put id fz outline-id link-pos))))))
-
-      ;; Remove staged entries that no longer exist.
-      (maphash (lambda (key _)
-                 (pcase-let* ((`(,id . ,fz) key))
-                   (org-roam-fztl--mapping-remove id fz)))
-               stage))))
+    ;; Remove staged entries that no longer exist.
+    (maphash (lambda (key _)
+               (pcase-let* ((`(,id . ,fz) key))
+                 (org-roam-fztl--mapping-remove id fz)))
+             stage)))
 
 ;;; Overlay Management
 
@@ -361,9 +370,10 @@ set to the whole buffer with `point-min' or `point-max'."
   (declare (indent defun))
   `(when (or (null len) (> len 0))
      (setq beg (or beg (point-min)) end (or end (point-max)))
-     (save-restriction
-       (narrow-to-region beg end)
-       ,@body)))
+     (save-excursion
+       (save-restriction
+         (narrow-to-region beg end)
+         ,@body))))
 
 (defun org-roam-fztl-overlay--render-in-title (&optional beg end len)
   "Render folgezettel overlays in document title.
@@ -489,7 +499,7 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
     (when-let*
         ((result
           (catch 'done
-            (pcase-dolist (`(,id . ,_) (org-roam-fztl-outline-nodes))
+            (dolist (id (org-roam-fztl-outline-nodes))
               (when-let* ((node (org-roam-node-from-id id)))
                 (with-current-buffer
                     (find-file-noselect (org-roam-node-file node))
@@ -524,14 +534,15 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
 
 (defun org-roam-fztl-mode--activate ()
   "Activate `org-roam-fztl-mode'."
-  ;; (add-hook 'window-configuration-change-hook #'org-roam-fztl--overlay-refresh 99 t)
+  (add-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe)
   (add-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh 99 t)
-  (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t))
+  (add-hook 'after-change-functions #'org-roam-fztl-overlay--refresh 99 t))
 
 (defun org-roam-fztl-mode--deactivate ()
   "Deactivate `org-roam-fztl-mode'."
-  (remove-hook 'after-save-hook #'org-roam-fztl-overlay--refresh t)
-  (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t))
+  (remove-hook 'after-change-functions #'org-roam-fztl-overlay--refresh t)
+  (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t)
+  (remove-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe))
 
 ;;;###autoload
 (define-minor-mode org-roam-fztl-mode
@@ -548,6 +559,7 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   "Major mode for folgezettel outline mode."
   (setq mode-name "fztl/outline")
   (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
+  (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
   (add-hook 'org-roam-post-node-insert-hook
             (lambda (id desc) (org-roam-fztl-outline-tags-refresh)) 99 t)
   (use-local-map org-roam-fztl-outline-mode-map))
