@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.8.1
+;; Version: 0.8.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -545,6 +545,8 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   "Major mode for folgezettel outline mode."
   (setq mode-name "fztl/outline")
   (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
+  (add-hook 'org-roam-post-node-insert-hook
+            (lambda (id desc) (org-roam-fztl-outline-tags-refresh)) 99 t)
   (use-local-map org-roam-fztl-outline-mode-map))
 
 (defvar org-roam-fztl-outline-mode-map
@@ -559,6 +561,7 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
     map)
   "Keymap for `org-roam-fztl-outline-mode'.")
 
+(define-key org-roam-fztl-outline-mode-prefix-map "t" #'org-roam-fztl-outline-tags-refresh)
 (define-key org-roam-fztl-outline-mode-prefix-map "v" #'org-roam-fztl-outline-preview-toggle)
 (define-key org-roam-fztl-outline-mode-map (kbd org-roam-fztl-prefix) org-roam-fztl-outline-mode-prefix-map)
 
