@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.8.2
+;; Version: 0.8.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -47,8 +47,9 @@
 
 (defun org-roam-fztl-outline-p (&optional node)
   "Return non-nil if NODE is folgezettel outline."
-  (when-let* ((node (or node (org-roam-node-at-point))))
-    (member org-roam-fztl-outline-tag (org-roam-node-tags node))))
+  (when-let* ((node (or node (org-roam-node-at-point)))
+              (tags (org-roam-node-tags node)))
+    (member org-roam-fztl-outline-tag tags)))
 
 (defun org-roam-fztl-outline-nodes ()
   "Get folgezettel outline nodes as alist.
@@ -329,7 +330,7 @@ OUTLINE-ID is the ID of outline node. POS is the outline node position."
   :group 'org-roam-fztl)
 
 (defun org-roam-fztl-overlay--put (beg end text)
-  "Add TEXT for overlay from BEG to END."
+  "Add TEXT overlay for content from BEG to END."
   (let* ((ov (make-overlay beg end))
          (propertized-text (propertize text 'face 'org-roam-fztl-overlay))
          (text (pcase org-roam-fztl-overlay-text-placement
@@ -347,71 +348,73 @@ OUTLINE-ID is the ID of outline node. POS is the outline node position."
 (defun org-roam-fztl-overlay--format (id)
   "Render folgezettel from ID for overlay."
   (when-let* ((fzs (org-roam-fztl--mapping-id2fz-get id)))
-    (string-join
-     (mapcar (lambda (fz)
-               (format org-roam-fztl-overlay-fz-format
-                       (org-roam-fztl-fz--render fz)))
-             fzs)
-     "")))
+    (string-join (mapcar (lambda (fz)
+                           (format org-roam-fztl-overlay-fz-format
+                                   (org-roam-fztl-fz--render fz)))
+                         fzs)
+                 "")))
 
-(defun org-roam-fztl-overlay--in-title ()
-  "Put folgezettel overlays in node title."
-  (save-excursion
-    (goto-char (point-min))
-    (let* ((id (org-roam-id-at-point))
-           (rendered (org-roam-fztl-overlay--format id)))
-      (when (and rendered
-                 (re-search-forward "^#\\+TITLE:[ \t]*\\(.*\\)$" nil t))
-        (org-roam-fztl-overlay--put (match-beginning 1)
-                                    (match-end 1)
-                                    rendered)))))
+(defmacro org-roam-fztl-overlay--region (beg end len &rest body)
+  "Initialize BEG, END, and LEN before running BODY.
+BODY is not run if LEN is nil or zero. If BEG or END is nil, the bound will be
+set to the whole buffer with `point-min' or `point-max'."
+  (declare (indent defun))
+  `(when (or (null len) (> len 0))
+     (setq beg (or beg (point-min)) end (or end (point-max)))
+     (save-restriction
+       (narrow-to-region beg end)
+       ,@body)))
 
-(defun org-roam-fztl-overlay--in-headlines ()
-  "Put folgezettel overlays in headlines.
-IDs are extracted from headline properties."
-  (org-element-map (org-element-parse-buffer) 'headline
-    (lambda (headline)
-      (let* ((id (org-element-property :ID headline))
-             (rendered (org-roam-fztl-overlay--format id)))
-        (when rendered
-          (org-roam-fztl-overlay--put
-           (+ (org-element-property :begin headline)
-              (org-element-property :level headline)
-              1)
-           (org-element-property :end headline)
-           rendered))))))
+(defun org-roam-fztl-overlay--render-in-title (&optional beg end len)
+  "Render folgezettel overlays in document title.
+The title is obtained from `#+title:'. For BEG, END, and LEN, see
+`org-roam-fztl-overlay--region'."
+  (org-roam-fztl-overlay--region beg end len
+    (goto-char beg)
+    (when-let* ((node (org-roam-node-at-point))
+                (ovt (org-roam-fztl-overlay--format (org-roam-node-id node))))
+      (when (re-search-forward "^#\\+TITLE:[ \t]*\\(.*\\)$" end t)
+        (org-roam-fztl-overlay--put (match-beginning 1) (match-end 1) ovt)))))
 
-(defun org-roam-fztl-overlay--in-links ()
-  "Put folgezettel overlays in Org links."
-  (org-element-map (org-element-parse-buffer) 'link
-    (lambda (link)
-      (when (string= (org-element-property :type link) "id")
-        (let* ((id (org-element-property :path link))
-               (rendered (org-roam-fztl-overlay--format id)))
-          (when rendered
-            (org-roam-fztl-overlay--put (org-element-property :begin link)
-                                        (org-element-property :end link)
-                                        rendered)))))))
+(defun org-roam-fztl-overlay--render-in-headlines (&optional beg end len)
+  "Render folgezettel overlays in headlines.
+IDs are extracted from headline properties. For BEG, END, and LEN, see
+`org-roam-fztl-overlay--region'."
+  (org-roam-fztl-overlay--region beg end len
+    (org-element-map (org-element-parse-buffer) 'headline
+      (lambda (elmt)
+        (when-let* ((id (org-element-property :ID elmt))
+                    (ovt (org-roam-fztl-overlay--format id))
+                    (beg (org-element-property :title-begin elmt))
+                    (end (org-element-property :title-end elmt)))
+          (org-roam-fztl-overlay--put beg end ovt))))))
 
-(defun org-roam-fztl-overlay--add ()
-  "Put folgezettel overlays in current buffer."
-  (when (org-roam-buffer-p)
-    (org-roam-fztl-overlay--in-title)
-    (org-roam-fztl-overlay--in-headlines)
-    (org-roam-fztl-overlay--in-links)))
+(defun org-roam-fztl-overlay--render-in-links (&optional beg end len)
+  "Render folgezettel overlays in Org links.
+For BEG, END, and LEN, see `org-roam-fztl-overlay--region'."
+  (org-roam-fztl-overlay--region beg end len
+    (org-element-map (org-element-parse-buffer) 'link
+      (lambda (elmt)
+        (when-let* ((id (and (string= (org-element-property :type elmt) "id")
+                             (org-element-property :path elmt)))
+                    (ovt (org-roam-fztl-overlay--format id))
+                    (beg (org-element-property :begin elmt))
+                    (end (org-element-property :end elmt)))
+          (org-roam-fztl-overlay--put beg end ovt))))))
 
-(defun org-roam-fztl-overlay--remove ()
-  "Remove folgezettel overlays in current buffer."
-  (when (org-roam-buffer-p)
-    (remove-overlays (point-min) (point-max) 'category 'fztl)))
+(defun org-roam-fztl-overlay--remove (&optional beg end len)
+  "Remove folgezettel overlays in region.
+For BEG, END, and LEN, see `org-roam-fztl-overlay--region'."
+  (org-roam-fztl-overlay--region beg end len
+    (remove-overlays beg end 'category 'fztl)))
 
-(defun org-roam-fztl-overlay--refresh ()
-  "Refresh folgezettel overlays in current buffer."
-  (when (org-roam-buffer-p)
-    (when (org-roam-fztl--mapping-empty-p)
-      (org-roam-fztl--mapping-init))
-    (org-roam-fztl-overlay--remove)
-    (org-roam-fztl-overlay--add)))
+(defun org-roam-fztl-overlay--refresh (&optional beg end len)
+  "Refresh folgezettel overlays in region.
+For BEG, END, and LEN, see `org-roam-fztl-overlay--region'."
+  (org-roam-fztl-overlay--remove beg end len)
+  (org-roam-fztl-overlay--render-in-title beg end len)
+  (org-roam-fztl-overlay--render-in-headlines beg end len)
+  (org-roam-fztl-overlay--render-in-links beg end len))
 
 ;;; Nodes
 
