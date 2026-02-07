@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.9.3
+;; Version: 0.9.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -561,7 +561,14 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
       (org-roam-fztl-mode--activate)
     (org-roam-fztl-mode--deactivate)))
 
-;;; Major Mode
+;;; Major Mode: Outline Buffer
+
+(defun org-roam-fztl-outline--headline-link ()
+  "Get link on headline at point if exists."
+  (when-let*
+      ((raw (org-get-heading t t t t))
+       (parsed (org-element-parse-secondary-string raw '(link))))
+    (org-element-map parsed 'link #'identity nil t)))
 
 (defcustom org-roam-fztl-outline-show-title 'minibuffer
   "Target to show node title at point.
@@ -573,25 +580,13 @@ Either nil or `minibuffer' is allowed."
 (defun org-roam-fztl-outline-show-title ()
   "Show note title in target specified in `org-roam-fztl-outline-show-title'."
   (when org-roam-fztl-outline-show-title
-    (when-let*
-        ((lnk (when-let*
-                  ((raw (org-get-heading t t t t))
-                   (parsed (org-element-parse-secondary-string raw '(link))))
-                (org-element-map parsed 'link #'identity nil t)))
-         (contents (org-element-contents lnk))
-         (desc (org-element-interpret-data contents)))
+    (when-let* ((lnk (org-roam-fztl-outline--headline-link))
+                (contents (org-element-contents lnk))
+                (desc (org-element-interpret-data contents)))
       (when (eq org-roam-fztl-outline-show-title 'minibuffer)
-        (minibuffer-message "Note: %s" desc)))))
-
-(define-derived-mode org-roam-fztl-outline-mode org-mode "fztl/outline"
-  "Major mode for folgezettel outline mode."
-  (setq mode-name "fztl/outline")
-  (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
-  (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
-  (add-hook 'org-roam-post-node-insert-hook
-            (lambda (id desc) (org-roam-fztl-outline-tags-refresh)) 99 t)
-  (add-hook 'post-command-hook #'org-roam-fztl-outline-show-title nil t)
-  (use-local-map org-roam-fztl-outline-mode-map))
+        (run-with-idle-timer 0.025 nil
+                             (lambda ()
+                               (minibuffer-message "Note: %s" desc)))))))
 
 (defvar org-roam-fztl-outline-mode-map
   (let ((map (make-sparse-keymap)))
@@ -619,6 +614,32 @@ Either nil or `minibuffer' is allowed."
                                   nil t)))
     (unless (derived-mode-p 'org-roam-fztl-outline-mode)
       (org-roam-fztl-outline-mode))))
+
+(defun org-roam-fztl-outline-org-return (&rest _rest)
+  "Override `org-return' for faster navigation.
+This command changes default behavior to find a link on current header and visit
+if such a link exists."
+  (interactive)
+  (if-let* ((lnk (org-roam-fztl-outline--headline-link))
+            (id (and (equal (org-element-property :type lnk) "id")
+                     (org-element-property :path lnk)))
+            (node (org-roam-node-from-id id)))
+      (org-roam-node-visit node)
+    (apply #'org-return _rest)))
+
+(define-derived-mode org-roam-fztl-outline-mode org-mode "fztl/outline"
+  "Major mode for folgezettel outline mode."
+  (setq mode-name "fztl/outline")
+
+  (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
+  (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
+  (add-hook 'org-roam-post-node-insert-hook
+            (lambda (id desc) (org-roam-fztl-outline-tags-refresh)) 99 t)
+  (add-hook 'post-command-hook #'org-roam-fztl-outline-show-title nil t)
+
+  (keymap-set org-roam-fztl-outline-mode-map
+              "RET" #'org-roam-fztl-outline-org-return)
+  (use-local-map org-roam-fztl-outline-mode-map))
 
 (provide 'org-roam-fztl)
 ;;; org-roam-fztl.el ends here
