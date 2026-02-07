@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.8.4
+;; Version: 0.8.5
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -535,6 +535,7 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
 (defun org-roam-fztl-mode--activate ()
   "Activate `org-roam-fztl-mode'."
   (add-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe)
+  (add-hook 'org-mode-hook #'org-roam-fztl-outline-mode--maybe-activate)
   (add-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh 99 t)
   (add-hook 'after-change-functions #'org-roam-fztl-overlay--refresh 99 t))
 
@@ -542,6 +543,7 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   "Deactivate `org-roam-fztl-mode'."
   (remove-hook 'after-change-functions #'org-roam-fztl-overlay--refresh t)
   (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t)
+  (remove-hook 'org-mode-hook #'org-roam-fztl-outline-mode--maybe-activate)
   (remove-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe))
 
 ;;;###autoload
@@ -585,13 +587,11 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   (when (and (derived-mode-p 'org-mode)
              (save-excursion
                (goto-char (point-min))
-               (re-search-forward (format "^#\\+filetags?:.*\\<%s\\>"
+               (re-search-forward (format "^#\\+filetags?:.*:%s:"
                                           org-roam-fztl-outline-tag)
                                   nil t)))
     (unless (derived-mode-p 'org-roam-fztl-outline-mode)
       (org-roam-fztl-outline-mode))))
-
-(add-hook 'org-mode-hook #'org-roam-fztl-outline-mode--maybe-activate)
 
 (provide 'org-roam-fztl)
 ;;; org-roam-fztl.el ends here
