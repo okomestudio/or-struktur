@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.9.1
+;; Version: 0.9.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -444,10 +444,10 @@ If not given, NODE will be node at point."
   "Perform operation of TYPE on folgezettel nodes.
 The function FILTER-FN takes a folgezettel and returns related folgezettels."
   (if (org-roam-fztl-node-has-fz-p)
-      (if-let* ((ids (mapcar
+      (if-let* ((ids (seq-keep
                       (lambda (fz) (org-roam-fztl-fz--to-id fz))
                       (apply #'append
-                             (mapcar
+                             (seq-keep
                               (lambda (fz) (funcall filter-fn fz))
                               (org-roam-fztl-fz--from-id))))))
           (pcase type
