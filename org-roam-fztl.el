@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.9.2
+;; Version: 0.9.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -55,11 +55,10 @@
   "Get folgezettel outline nodes as alist.
 The returned alist has the node ID of folgezettel outline as key and folgezettel
 starting number as value."
-  (seq-keep
-   (lambda (node)
-     (when (org-roam-fztl-outline-p node)
-       (org-roam-node-id node)))
-   (org-roam-node-list)))
+  (seq-keep (lambda (node)
+              (when (org-roam-fztl-outline-p node)
+                (org-roam-node-id node)))
+            (org-roam-node-list)))
 
 (defcustom org-roam-fztl-outline-tags-exclude nil
   "Tags to exclude from outlines."
@@ -179,12 +178,19 @@ If not given, ID defaults to the ID of current node."
 
 (defun org-roam-fztl-fz--get-children (fz)
   "Get child folgezettel from FZ."
-  (let* ((fz (copy-sequence fz))
-         (fz-child (org-roam-fztl-fz--resize fz (1+ (length fz)) 1))
-         result)
-    (while (org-roam-fztl--mapping-fz2id-get fz-child)
-      (push (copy-sequence fz-child) result)
-      (org-roam-fztl-fz--lsd-inc fz-child))
+  (let (result)
+    (if fz
+        (let* ((fz (copy-sequence fz))
+               (fz-child (org-roam-fztl-fz--resize fz (1+ (length fz)) 1)))
+          (while (org-roam-fztl--mapping-fz2id-get fz-child)
+            (push (copy-sequence fz-child) result)
+            (org-roam-fztl-fz--lsd-inc fz-child)))
+      ;; Top-level folgezettels could be non-contiguous.
+      (maphash (lambda (k _)
+                 (pcase-let ((`(,type ,fz) k))
+                   (when (and (eq type 'fz) (= (length fz) 1))
+                     (push (copy-sequence fz) result))))
+               org-roam-fztl--mapping))
     result))
 
 (defun org-roam-fztl-fz--get-parents (fz)
