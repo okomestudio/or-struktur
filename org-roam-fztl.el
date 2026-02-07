@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.8.5
+;; Version: 0.9.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -557,6 +557,26 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
 
 ;;; Major Mode
 
+(defcustom org-roam-fztl-outline-show-title 'minibuffer
+  "Target to show node title at point.
+Either nil or `minibuffer' is allowed."
+  :type '(choice (const :tag "Minibuffer" minibuffer)
+                 (const :tag "Do not show" nil))
+  :group 'org-roam-fztl)
+
+(defun org-roam-fztl-outline-show-title ()
+  "Show note title in target specified in `org-roam-fztl-outline-show-title'."
+  (when org-roam-fztl-outline-show-title
+    (when-let*
+        ((lnk (when-let*
+                  ((raw (org-get-heading t t t t))
+                   (parsed (org-element-parse-secondary-string raw '(link))))
+                (org-element-map parsed 'link #'identity nil t)))
+         (contents (org-element-contents lnk))
+         (desc (org-element-interpret-data contents)))
+      (when (eq org-roam-fztl-outline-show-title 'minibuffer)
+        (minibuffer-message "Note: %s" desc)))))
+
 (define-derived-mode org-roam-fztl-outline-mode org-mode "fztl/outline"
   "Major mode for folgezettel outline mode."
   (setq mode-name "fztl/outline")
@@ -564,6 +584,7 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
   (add-hook 'org-roam-post-node-insert-hook
             (lambda (id desc) (org-roam-fztl-outline-tags-refresh)) 99 t)
+  (add-hook 'post-command-hook #'org-roam-fztl-outline-show-title nil t)
   (use-local-map org-roam-fztl-outline-mode-map))
 
 (defvar org-roam-fztl-outline-mode-map
