@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.11.1
+;; Version: 0.11.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -524,6 +524,8 @@ On each headline, refresh is performed by `org-roam-fztl-outline-tags-refresh'."
        (parsed (org-element-parse-secondary-string raw '(link))))
     (org-element-map parsed 'link #'identity nil t)))
 
+;; Show node title in minibuffer
+
 (defcustom org-roam-fztl-outline-show-title 'minibuffer
   "Target to show node title at point.
 Either nil or `minibuffer' is allowed."
@@ -531,16 +533,28 @@ Either nil or `minibuffer' is allowed."
                  (const :tag "Do not show" nil))
   :group 'org-roam-fztl)
 
+(defcustom org-roam-fztl-outline-show-title-delay 0.2
+  "Delay before showing title in outline."
+  :type 'number
+  :group 'org-roam-fztl)
+
+(defvar-local org-roam-fztl-outline-show-title--timer nil)
+
 (defun org-roam-fztl-outline-show-title ()
   "Show note title in target specified in `org-roam-fztl-outline-show-title'."
   (when org-roam-fztl-outline-show-title
+    (when (timerp org-roam-fztl-outline-show-title--timer)
+      (cancel-timer org-roam-fztl-outline-show-title--timer))
     (when-let* ((lnk (org-roam-fztl-outline--headline-link))
                 (contents (org-element-contents lnk))
                 (desc (org-element-interpret-data contents)))
       (when (eq org-roam-fztl-outline-show-title 'minibuffer)
-        (run-with-idle-timer 0.025 nil
-                             (lambda ()
-                               (minibuffer-message "Note: %s" desc)))))))
+        (setq org-roam-fztl-outline-show-title--timer
+              (run-with-idle-timer
+               org-roam-fztl-outline-show-title-delay nil
+               (lambda ()
+                 (minibuffer-message "Note: %s" desc)
+                 (setq org-roam-fztl-outline-show-title--timer nil))))))))
 
 ;; When outline buffer is modified, indicate with fringe color.
 
