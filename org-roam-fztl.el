@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.10.1
+;; Version: 0.10.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -546,6 +546,27 @@ Either nil or `minibuffer' is allowed."
                              (lambda ()
                                (minibuffer-message "Note: %s" desc)))))))
 
+;; When outline buffer is modified, indicate with fringe color.
+
+(defface org-roam-fztl-outline-modified
+  '((((background dark))  :inherit region)
+    (((background light)) :inherit region))
+  "Fringe face for modified outline buffers.")
+
+(defvar-local org-roam-fztl-outline-modified--cookie nil)
+
+(defun org-roam-fztl-outline-modified--change-fringe ()
+  "Indicate when outline buffer is modified.
+Add this to `post-command-hook'."
+  (if (buffer-modified-p)
+      (setq-local org-roam-fztl-outline-modified--cookie
+                  (face-remap-add-relative
+                   'fringe 'org-roam-fztl-outline-modified))
+    (when org-roam-fztl-outline-modified--cookie
+      (face-remap-remove-relative org-roam-fztl-outline-modified--cookie)
+      (set-window-fringes (selected-window) nil nil t)
+      (setq-local org-roam-fztl-outline-modified--cookie nil))))
+
 ;;; Keymaps
 
 (defcustom org-roam-fztl-mode-prefix "C-c f"
@@ -606,6 +627,8 @@ if such a link exists."
   (keymap-set org-roam-fztl-outline-mode-map "<return>"
               #'org-roam-fztl-outline-org-return)
 
+  (add-hook 'post-command-hook
+            #'org-roam-fztl-outline-modified--change-fringe nil t)
   (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
   (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
   (add-hook 'org-roam-post-node-insert-hook
