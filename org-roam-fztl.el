@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.11.2
+;; Version: 0.12.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -577,111 +577,6 @@ Add this to `post-command-hook'."
       (set-window-fringes (selected-window) nil nil t)
       (setq-local org-roam-fztl-outline-modified--cookie nil))))
 
-;; Outline Window Layout
-
-(defcustom org-roam-fztl-outline-layout-side 'top
-  "Specify side layout as symbol."
-  :type '(choice (const :tag "Top" top)
-                 (const :tag "Right" right)
-                 (const :tag "Left" left)
-                 (const :tag "Bottom" bottom)
-                 (const :tag "No side layout" none))
-  :group 'org-roam-fztl)
-
-(defcustom org-roam-fztl-outline-layout-height 0.167
-  "Window height in fraction when top/bottom layout is in use."
-  :type 'number
-  :group 'org-roam-fztl)
-
-(defcustom org-roam-fztl-outline-layout-width 0.167
-  "Window width in fraction when right/left layout is in use."
-  :type 'number
-  :group 'org-roam-fztl)
-
-(defun org-roam-fztl-outline-layout--wc (&optional side)
-  "Window configuration for SIDE layout.
-Use this as alist entry for `display-buffer-in-side-window' or
-`display-buffer-alist'.
-
- When not specified, SIDE defaults to
-`org-roam-fztl-outline-layout-side'."
-  (if side
-      (setopt org-roam-fztl-outline-layout-side side)
-    (setq side org-roam-fztl-outline-layout-side))
-  (unless (eq side 'none)
-    (list (cons 'side side)
-          (cons 'slot 0)
-          (if (member side '(top bottom))
-              (cons 'window-height org-roam-fztl-outline-layout-height)
-            (cons 'window-width org-roam-fztl-outline-layout-width))
-          (cons 'dedicated t)
-          (cons 'no-delete-other-windows t)
-          (cons 'window-parameters
-                (list (cons 'mode-line-format 'none)
-                      (cons 'no-delete-other-windows t)
-                      (cons 'dedicated 'side))))))
-
-(defun org-roam-fztl-outline-layout- (side)
-  "Layout outline window to SIDE."
-  (seq-find
-   (lambda (node)
-     (when-let* ((file (org-roam-node-file node))
-                 (buffer (get-file-buffer file))
-                 (win (get-buffer-window buffer t)))
-       (delete-window win)
-       (display-buffer-in-side-window
-        buffer (org-roam-fztl-outline-layout--wc side))))
-   (org-roam-fztl-node-outline-list)))
-
-(defun org-roam-fztl-outline-layout-top ()
-  "Layout outline window to top."
-  (interactive)
-  (org-roam-fztl-outline-layout- 'top))
-
-(defun org-roam-fztl-outline-layout-right ()
-  "Layout outline window to right."
-  (interactive)
-  (org-roam-fztl-outline-layout- 'right))
-
-(defun org-roam-fztl-outline-layout-botton ()
-  "Layout outline window to bottom."
-  (interactive)
-  (org-roam-fztl-outline-layout- 'bottom))
-
-(defun org-roam-fztl-outline-layout-left ()
-  "Layout outline window to left."
-  (interactive)
-  (org-roam-fztl-outline-layout- 'left))
-
-(defun org-roam-fztl-outline-layout-none ()
-  "Do not layout outline window to side."
-  (interactive)
-  (org-roam-fztl-outline-layout- 'none))
-
-(defun org-roam-fztl-outline-toggle ()
-  "Toggle outline note in side layout."
-  (interactive)
-  (if-let* ((outline-buffers
-             (seq-keep (lambda (node)
-                         (when-let* ((file (org-roam-node-file node))
-                                     (buffer (get-file-buffer file)))
-                           buffer))
-                       (org-roam-fztl-node-outline-list))))
-      (unless (seq-find (lambda (buffer)
-                          (when (member buffer outline-buffers)
-                            (delete-window (get-buffer-window buffer))
-                            t))
-                        (mapcar #'window-buffer (window-list nil nil nil)))
-        (display-buffer-in-side-window
-         (car outline-buffers) (org-roam-fztl-outline-layout--wc)))
-    (let ((display-buffer-alist
-           (cons `("\\.org\\'"
-                   (display-buffer-in-side-window)
-                   ,@(org-roam-fztl-outline-layout--wc))
-                 display-buffer-alist)))
-      (save-selected-window
-        (org-roam-node-find nil nil #'org-roam-fztl-node-outline-p)))))
-
 ;;; Keymaps
 
 (defcustom org-roam-fztl-mode-prefix "C-c f"
@@ -730,7 +625,8 @@ if such a link exists."
   "Activate `org-roam-fztl-outline-mode' if buffer is folgezettel outline."
   (when (and (save-excursion
                (goto-char (point-min))
-               (org-roam-fztl-node-outline-p)))
+               (org-roam-fztl-node-outline-p))
+             org-roam-fztl-outline-window-mode)
     (unless (derived-mode-p 'org-roam-fztl-outline-mode)
       (org-roam-fztl-outline-mode))))
 
@@ -750,7 +646,150 @@ if such a link exists."
             (lambda (id desc) (org-roam-fztl-outline-tags-refresh)) 99 t)
   (add-hook 'post-command-hook #'org-roam-fztl-outline-show-title nil t))
 
-;;; Minor Mode
+;;; Minor Mode (org-roam-fztl-outline-window)
+
+(defcustom org-roam-fztl-outline-window-layout '(top . 0.167)
+  "Side window layout options."
+  :type '(alist :key-type (choice (const :tag "Top" top)
+                                  (const :tag "Right" right)
+                                  (const :tag "Left" left)
+                                  (const :tag "Bottom" bottom))
+                :value-type number)
+  :group 'org-roam-fztl)
+
+(defvar org-roam-fztl-outline-window-layout--size-default 0.167)
+
+(defun org-roam-fztl-outline-window-layout--current (&optional side)
+  "Set window layout to SIDE or get current one."
+  ;; Ensure list of cons.
+  (setq org-roam-fztl-outline-window-layout
+        (cond ((null org-roam-fztl-outline-window-layout) nil)
+              ((consp (car org-roam-fztl-outline-window-layout))
+               org-roam-fztl-outline-window-layout)
+              ((consp org-roam-fztl-outline-window-layout)
+               (list org-roam-fztl-outline-window-layout))
+              (t nil)))
+  (if side
+      (setq org-roam-fztl-outline-window-layout
+            (if-let* ((v (assq side org-roam-fztl-outline-window-layout)))
+                (cons v (delq v org-roam-fztl-outline-window-layout))
+              (cons (cons side org-roam-fztl-outline-window-layout--size-default)
+                    org-roam-fztl-outline-window-layout))))
+  (car org-roam-fztl-outline-window-layout))
+
+(defun org-roam-fztl-outline-window--config (&optional side)
+  "Get SIDE layout window configuration.
+This returns an alist entry for `display-buffer-in-side-window' or
+`display-buffer-alist'. When not specified, LAYOUT defaults to the first entry
+in `org-roam-fztl-outline-layout'."
+  (when-let* ((layout (org-roam-fztl-outline-window-layout--current side))
+              (side (car layout))
+              (size (cdr layout))
+              (size-entry (if (member side '(top bottom))
+                              (cons 'window-height size)
+                            (cons 'window-width size))))
+    (list (cons 'side side)
+          (cons 'slot 0)
+          size-entry
+          (cons 'dedicated t)
+          (cons 'no-delete-other-windows t)
+          (cons 'window-parameters
+                (list (cons 'mode-line-format 'none)
+                      (cons 'no-delete-other-windows t)
+                      (cons 'no-other-window t)
+                      (cons 'dedicated 'side))))))
+
+(defvar org-roam-fztl-outline-window--re-file nil)
+
+(defun org-roam-fztl-outline-window--display-buffer-alist-update (&optional clear)
+  "Update `display-buffer-alist' for current outline nodes.
+This update needs to be performed whenever the list of outline nodes changes.
+
+If CLEAR is non-nil, remove the relevant `display-buffer-alist' entry."
+  (when org-roam-fztl-outline-window--re-file
+    (setq display-buffer-alist
+          (assoc-delete-all org-roam-fztl-outline-window--re-file
+                            display-buffer-alist)))
+  (unless clear
+    (when-let* ((files (mapcar (lambda (node)
+                                 (file-name-nondirectory
+                                  (org-roam-node-file node)))
+                               (org-roam-fztl-node-outline-list))))
+      (setq org-roam-fztl-outline-window--re-file (regexp-opt files))
+      (setq display-buffer-alist
+            (cons `(,org-roam-fztl-outline-window--re-file
+                    (display-buffer-in-side-window)
+                    ,@(org-roam-fztl-outline-window--config))
+                  display-buffer-alist)))))
+
+(defun org-roam-fztl-outline-window- (side)
+  "Layout outline window to SIDE."
+  (setf (alist-get org-roam-fztl-outline-window--re-file display-buffer-alist)
+        `((display-buffer-in-side-window)
+          ,@(org-roam-fztl-outline-window--config side)))
+  (seq-find (lambda (window)
+              (let ((buffer (window-buffer window)))
+                (with-current-buffer buffer
+                  (when (derived-mode-p 'org-roam-fztl-outline-mode)
+                    (delete-window window)
+                    (display-buffer buffer)))))
+            (window-list nil nil nil)))
+
+(defun org-roam-fztl-outline-window-top ()
+  "Layout outline window to top."
+  (interactive)
+  (org-roam-fztl-outline-window- 'top))
+
+(defun org-roam-fztl-outline-window-right ()
+  "Layout outline window to right."
+  (interactive)
+  (org-roam-fztl-outline-window- 'right))
+
+(defun org-roam-fztl-outline-window-botton ()
+  "Layout outline window to bottom."
+  (interactive)
+  (org-roam-fztl-outline-window- 'bottom))
+
+(defun org-roam-fztl-outline-window-left ()
+  "Layout outline window to left."
+  (interactive)
+  (org-roam-fztl-outline-window- 'left))
+
+(defun org-roam-fztl-outline-window-mode--on ()
+  "Perform operations on `org-roam-fztl-outline-window-mode' activation."
+  (org-roam-fztl-outline-window--display-buffer-alist-update)
+  (unless
+      (seq-keep (lambda (buffer)
+                  (with-current-buffer buffer
+                    (when (derived-mode-p 'org-roam-fztl-outline-mode)
+                      (display-buffer buffer)
+                      t)))
+                (buffer-list))
+    (save-selected-window
+      (org-roam-node-find nil nil #'org-roam-fztl-node-outline-p))))
+
+(defun org-roam-fztl-outline-window-mode--off ()
+  "Perform operations on `org-roam-fztl-outline-window-mode' deactivation."
+  (seq-keep (lambda (window)
+              (let ((buffer (window-buffer window)))
+                (with-current-buffer buffer
+                  (when (derived-mode-p 'org-roam-fztl-outline-mode)
+                    (delete-window window)
+                    t))))
+            (window-list nil nil nil))
+  (org-roam-fztl-outline-window--display-buffer-alist-update 'clear))
+
+;;;###autoload
+(define-minor-mode org-roam-fztl-outline-window-mode
+  "The global minor mode minor mode for folgezettel outline window."
+  :global t
+  :lighter " fztl/ow"
+  :group 'org-roam
+  (if org-roam-fztl-outline-window-mode
+      (org-roam-fztl-outline-window-mode--on)
+    (org-roam-fztl-outline-window-mode--off)))
+
+;;; Minor Mode (org-roam-fztl-mode)
 
 (defun org-roam-fztl-mode--on ()
   "Activate `org-roam-fztl-mode'."
