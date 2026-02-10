@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.12.1
+;; Version: 0.12.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -524,6 +524,15 @@ On each headline, refresh is performed by `org-roam-fztl-outline-tags-refresh'."
        (parsed (org-element-parse-secondary-string raw '(link))))
     (org-element-map parsed 'link #'identity nil t)))
 
+(defun org-roam-fztl-outline--headline-linked-node ()
+  "Get node linked on headline at point if exists."
+  (when-let*
+      ((lnk (org-roam-fztl-outline--headline-link))
+       (id (and (equal (org-element-property :type lnk) "id")
+                (org-element-property :path lnk)))
+       (node (org-roam-node-from-id id)))
+    node))
+
 ;; Show node title in minibuffer
 
 (defcustom org-roam-fztl-outline-show-title 'minibuffer
@@ -577,66 +586,135 @@ Add this to `post-command-hook'."
       (set-window-fringes (selected-window) nil nil t)
       (setq-local org-roam-fztl-outline-modified--cookie nil))))
 
-;;; Keymaps
-
-(defcustom org-roam-fztl-mode-prefix "C-c f"
-  "Prefix key sequence for `org-roam-fztl-mode' commands."
-  :type 'string
-  :group 'org-roam-fztl)
-
-(defvar-keymap org-roam-fztl-mode-prefix-map
-  :doc "Keymap for `org-roam-fztl-mode' under prefix."
-  "a" #'org-roam-fztl-node-find
-  "c" #'org-roam-fztl-node-find-children
-  "p" #'org-roam-fztl-node-find-parents
-  "s" #'org-roam-fztl-node-find-siblings
-  "i c" #'org-roam-fztl-node-insert-child
-  "i p" #'org-roam-fztl-node-insert-parent
-  "i s" #'org-roam-fztl-node-insert-sibling
-  "o" #'org-roam-fztl-node-jump-to-outline)
-
-(defvar-keymap org-roam-fztl-mode-map
-  :doc "Keymap for `org-roam-fztl-mode'."
-  :parent org-mode-map)
-
-(keymap-set org-roam-fztl-mode-map org-roam-fztl-mode-prefix org-roam-fztl-mode-prefix-map)
-
-(defvar-keymap org-roam-fztl-outline-mode-prefix-map
-  :doc "Keymap for `org-roam-fztl-outline-mode'."
-  :parent org-roam-fztl-mode-prefix-map
-  "t" #'org-roam-fztl-outline-tags-refresh
-  "v" #'org-roam-fztl-outline-preview-toggle)
-
 ;;; Major Mode (org-roam-fztl-outline-mode)
+
+(defun org-roam-fztl-outline-mode--maybe-activate (win)
+  "Activate `org-roam-fztl-outline-mode' conditionally.
+Add this to `window-buffer-change-functions' as buffer-local to receive the
+window object as WIN"
+  (when-let* ((buffer (and (windowp win) (window-buffer win))))
+    (with-current-buffer buffer
+      (when (and org-roam-fztl-outline-window-mode
+                 (org-roam-buffer-p))
+        (goto-char (point-min))
+        (when (org-roam-fztl-node-outline-p)
+          (unless (derived-mode-p 'org-roam-fztl-outline-mode)
+            (org-roam-fztl-outline-mode)))))))
 
 (defun org-roam-fztl-outline-org-return (&rest _rest)
   "Override `org-return' for faster navigation.
 This command changes default behavior to find a link on current header and visit
 if such a link exists."
   (interactive)
-  (if-let* ((lnk (org-roam-fztl-outline--headline-link))
-            (id (and (equal (org-element-property :type lnk) "id")
-                     (org-element-property :path lnk)))
-            (node (org-roam-node-from-id id)))
+  (if-let* ((node (org-roam-fztl-outline--headline-linked-node)))
       (org-roam-node-visit node)
     (apply #'org-return _rest)))
 
-(defun org-roam-fztl-outline-mode--maybe-activate ()
-  "Activate `org-roam-fztl-outline-mode' if buffer is folgezettel outline."
-  (when (and (save-excursion
-               (goto-char (point-min))
-               (org-roam-fztl-node-outline-p))
-             org-roam-fztl-outline-window-mode)
-    (unless (derived-mode-p 'org-roam-fztl-outline-mode)
-      (org-roam-fztl-outline-mode))))
+(defun org-roam-fztl-outline-node-open ()
+  "Open node at point in another window."
+  (interactive)
+  (when-let*
+      ((node (org-roam-fztl-outline--headline-linked-node))
+       (file (org-roam-node-file node))
+       (buf (find-file-noselect file))
+       (win (get-mru-window nil t t)))
+    (display-buffer buf
+                    `((display-buffer-in-previous-window
+                       display-buffer-reuse-window
+                       display-buffer-use-some-window)
+                      (inhibit-same-window . t)
+                      (window . ,win)))))
+
+(defun org-roam-fztl-outline-switch-node ()
+  "Switch to different outline node."
+  (interactive)
+  (org-roam-node-find nil nil #'org-roam-fztl-node-outline-p))
+
+(defun org-roam-fztl-outline-edit ()
+  "Edit outline node normally."
+  (interactive)
+  (let* ((node (org-roam-node-at-point))
+         (file (org-roam-node-file node))
+         (buf (find-file-noselect file))
+         (win (get-mru-window nil t t)))
+    (org-roam-fztl-outline-window-mode -1)
+    (display-buffer buf
+                    `((display-buffer-in-previous-window
+                       display-buffer-reuse-window
+                       display-buffer-use-some-window)
+                      (inhibit-same-window . t)
+                      (window . ,win)))
+    (with-current-buffer buf
+      (org-mode)
+      (read-only-mode -1))))
+
+(defmacro org-roam-fztl-outline--modify (&rest body)
+  "Temporarily toggle `read-only-mode' while running BODY."
+  `(let* ((inhibit-read-only t))
+     (unwind-protect
+         (progn
+           (read-only-mode -1)
+           ,@body
+           (save-buffer))
+       (read-only-mode +1))))
+
+(defun org-roam-fztl-outline-insert-child ()
+  "Insert child of current heading."
+  (interactive)
+  (org-roam-fztl-outline--modify
+   (end-of-line)
+   (org-meta-return)
+   (org-do-demote)
+   (org-roam-node-insert)
+   (beginning-of-line)))
+
+(defun org-roam-fztl-outline-insert-sibling ()
+  "Insert sibling of current headline."
+  (interactive)
+  (org-roam-fztl-outline--modify
+   (org-insert-heading-respect-content)
+   (org-roam-node-insert)
+   (beginning-of-line)))
+
+(defun org-roam-fztl-outline-delete-subtree ()
+  "Delete subtree of current headline."
+  (interactive)
+  (org-roam-fztl-outline--modify
+   (beginning-of-line)
+   (org-mark-subtree)
+   (call-interactively #'kill-region)))
+
+(defvar-keymap org-roam-fztl-outline-mode-map
+  :doc "Keymap for `org-roam-fztl-mode' under prefix."
+  ;; Similar to org-speed-command:
+  "n" #'org-next-visible-heading
+  "p" #'org-previous-visible-heading
+  "f" #'org-forward-heading-same-level
+  "b" #'org-backward-heading-same-level
+  "u" #'outline-up-heading
+
+  "C" #'org-roam-fztl-outline-insert-child
+  "S" #'org-roam-fztl-outline-insert-sibling
+  "D" #'org-roam-fztl-outline-delete-subtree
+  "E" #'org-roam-fztl-outline-edit
+  "V" #'org-roam-fztl-outline-preview-toggle
+  "O" #'org-roam-fztl-outline-switch-node
+  ;; "G" #'org-roam-fztl-outline-tags-refresh
+
+  "v" #'org-roam-fztl-outline-org-return
+  "<return>" #'org-roam-fztl-outline-org-return
+
+  "o" #'org-roam-fztl-outline-node-open)
 
 ;;;###autoload
 (define-derived-mode org-roam-fztl-outline-mode org-mode "fztl"
   "Major mode for folgezettel outline mode."
-  (keymap-set org-roam-fztl-outline-mode-map org-roam-fztl-mode-prefix
-              org-roam-fztl-outline-mode-prefix-map)
-  (keymap-set org-roam-fztl-outline-mode-map "<return>"
-              #'org-roam-fztl-outline-org-return)
+  :group 'org-roam
+  (read-only-mode 1)
+  (setq-local org-use-speed-commands nil)
+
+  ;; (set-keymap-parent org-roam-fztl-outline-mode-map nil)
+  (keymap-global-set "C-c f o" #'org-roam-fztl-outline-window-focus)
 
   (add-hook 'post-command-hook
             #'org-roam-fztl-outline-modified--change-fringe nil t)
@@ -755,6 +833,18 @@ If CLEAR is non-nil, remove the relevant `display-buffer-alist' entry."
   (interactive)
   (org-roam-fztl-outline-window- 'left))
 
+(defun org-roam-fztl-outline-window-focus ()
+  "Put focus on outline window."
+  (interactive)
+  (when org-roam-fztl-outline-window-mode
+    (seq-keep (lambda (window)
+                (let ((buffer (window-buffer window)))
+                  (with-current-buffer buffer
+                    (when (derived-mode-p 'org-roam-fztl-outline-mode)
+                      (select-window window)
+                      t))))
+              (window-list nil nil nil))))
+
 (defun org-roam-fztl-outline-window-mode--on ()
   "Perform operations on `org-roam-fztl-outline-window-mode' activation."
   (org-roam-fztl-outline-window--display-buffer-alist-update)
@@ -791,10 +881,32 @@ If CLEAR is non-nil, remove the relevant `display-buffer-alist' entry."
 
 ;;; Minor Mode (org-roam-fztl-mode)
 
+(defcustom org-roam-fztl-mode-prefix "C-c f"
+  "Prefix key sequence for `org-roam-fztl-mode' commands."
+  :type 'string
+  :group 'org-roam-fztl)
+
+(defvar-keymap org-roam-fztl-mode-prefix-map
+  :doc "Keymap for `org-roam-fztl-mode' under prefix."
+  "a" #'org-roam-fztl-node-find
+  "c" #'org-roam-fztl-node-find-children
+  "p" #'org-roam-fztl-node-find-parents
+  "s" #'org-roam-fztl-node-find-siblings
+  "i c" #'org-roam-fztl-node-insert-child
+  "i p" #'org-roam-fztl-node-insert-parent
+  "i s" #'org-roam-fztl-node-insert-sibling
+  "o" #'org-roam-fztl-node-jump-to-outline)
+
+(defvar-keymap org-roam-fztl-mode-map
+  :doc "Keymap for `org-roam-fztl-mode'.")
+
+(keymap-set org-roam-fztl-mode-map org-roam-fztl-mode-prefix org-roam-fztl-mode-prefix-map)
+
 (defun org-roam-fztl-mode--on ()
   "Activate `org-roam-fztl-mode'."
   (add-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe)
-  (add-hook 'org-mode-hook #'org-roam-fztl-outline-mode--maybe-activate)
+  (add-hook 'window-buffer-change-functions
+            #'org-roam-fztl-outline-mode--maybe-activate nil t)
   (add-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh 99 t)
   (add-hook 'after-change-functions #'org-roam-fztl-overlay--refresh 99 t))
 
@@ -802,7 +914,8 @@ If CLEAR is non-nil, remove the relevant `display-buffer-alist' entry."
   "Deactivate `org-roam-fztl-mode'."
   (remove-hook 'after-change-functions #'org-roam-fztl-overlay--refresh t)
   (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t)
-  (remove-hook 'org-mode-hook #'org-roam-fztl-outline-mode--maybe-activate)
+  (remove-hook 'window-buffer-change-functions
+               #'org-roam-fztl-outline-mode--maybe-activate)
   (remove-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe))
 
 ;;;###autoload
