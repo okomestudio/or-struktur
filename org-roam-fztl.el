@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.13.1
+;; Version: 0.13.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -829,7 +829,8 @@ When called from a note with folgezettel ID, the point will be moved to the
 entry in the outline."
   (interactive)
   (when-let* ((win (org-roam-fztl-outline-window--get)))
-    (if-let* ((node (org-roam-node-at-point))
+    (if-let* ((node (and (derived-mode-p 'org-roam-mode)
+                         (org-roam-node-at-point)))
               (id (org-roam-node-id node))
               (items (org-roam-fztl-fz--from-id id 'extra)))
         (pcase-dolist (`(,fz ,outline-id ,pos) items)
