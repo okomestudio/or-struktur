@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.12.2
+;; Version: 0.13.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -90,10 +90,12 @@ If given, fill new digit(s) with INITVAL (defaults to zero)."
   (let ((lsd (1- (length fz))))
     (setcar (nthcdr lsd fz) (1+ (nth lsd fz)))))
 
-(defun org-roam-fztl-fz--from-id (&optional id)
+(defun org-roam-fztl-fz--from-id (&optional id extra)
   "Get folgezettels from ID.
-If not given, ID defaults to the ID of current node."
-  (org-roam-fztl--mapping-id2fz-get (or id (org-roam-id-at-point))))
+If not given, ID defaults to the ID of current node.
+
+See `org-roam-fztl--mapping-id2fz-get' for EXTRA."
+  (org-roam-fztl--mapping-id2fz-get (or id (org-roam-id-at-point)) extra))
 
 (defun org-roam-fztl-fz--to-id (fz)
   "Get ID for folgezettel FZ."
@@ -155,7 +157,7 @@ OUTLINE-ID is the ID of outline node. POS is the outline node position."
          (value (cons outline-id (list (cons fz pos)))))
     (if-let* ((vs (gethash key org-roam-fztl--mapping)))
         (let ((fz-pos-items (alist-get outline-id vs nil nil #'equal)))
-          (setf (alist-get fz fz-pos-items nil nil #'equal) (cons fz pos))
+          (setf (alist-get fz fz-pos-items nil nil #'equal) pos)
           (setf (alist-get outline-id vs nil nil #'equal) fz-pos-items)
           (puthash key vs org-roam-fztl--mapping))
       (puthash key (list value) org-roam-fztl--mapping))
@@ -183,13 +185,14 @@ OUTLINE-ID is the ID of outline node. POS is the outline node position."
   (when-let* ((v (gethash `(fz ,fz) org-roam-fztl--mapping)))
     (car v)))
 
-(defun org-roam-fztl--mapping-id2fz-get (id)
-  "Get all folgezettels associated with ID from mapping storage."
+(defun org-roam-fztl--mapping-id2fz-get (id &optional extra)
+  "Get all folgezettels associated with ID from mapping storage.
+When EXTRA is non-nil, return also outline ID and position in it."
   (when-let* ((vs (gethash `(id ,id) org-roam-fztl--mapping)))
     (let (result)
       (pcase-dolist (`(,outline-id . ,fz-pos-items) vs)
         (pcase-dolist (`(,fz . ,pos) fz-pos-items)
-          (push fz result)))
+          (push (if extra `(,fz ,outline-id ,pos) fz) result)))
       result)))
 
 (defun org-roam-fztl--mapping-init ()
@@ -418,26 +421,6 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   "Insert Org link to sibling of folgezettel at point."
   (interactive)
   (org-roam-fztl-node--op 'insert #'org-roam-fztl-fz--get-siblings))
-
-(defun org-roam-fztl-node-jump-to-outline ()
-  "Jump to outline entry for folgezettel at point."
-  (interactive)
-  (when-let* ((id (org-roam-node-id (org-roam-node-at-point)))
-              (pattern (format "\\[\\[id:%s\\]\\(\\[[^]]+\\]\\)?\\]" id)))
-    (when-let*
-        ((result
-          (catch 'done
-            (dolist (node (org-roam-fztl-node-outline-list))
-              (with-current-buffer
-                  (find-file-noselect (org-roam-node-file node))
-                (goto-char (point-min))
-                (when (re-search-forward pattern nil t)
-                  (throw 'done `(,node ,(point)))))))))
-      (pcase-let ((`(,node ,pt) result))
-        (org-roam-node-visit node t t)
-        (goto-char pt)
-        (org-reveal)
-        (recenter)))))
 
 (defun org-roam-fztl-node-outline-p (&optional node)
   "Return non-nil if NODE is folgezettel outline."
@@ -800,18 +783,25 @@ If CLEAR is non-nil, remove the relevant `display-buffer-alist' entry."
                     ,@(org-roam-fztl-outline-window--config))
                   display-buffer-alist)))))
 
+(defun org-roam-fztl-outline-window--get ()
+  "Get visible outline window."
+  (seq-find (lambda (win)
+              (let ((buffer (window-buffer win)))
+                (with-current-buffer buffer
+                  (derived-mode-p 'org-roam-fztl-outline-mode))))
+            (window-list nil nil nil)))
+
 (defun org-roam-fztl-outline-window- (side)
   "Layout outline window to SIDE."
-  (setf (alist-get org-roam-fztl-outline-window--re-file display-buffer-alist)
-        `((display-buffer-in-side-window)
-          ,@(org-roam-fztl-outline-window--config side)))
-  (seq-find (lambda (window)
-              (let ((buffer (window-buffer window)))
-                (with-current-buffer buffer
-                  (when (derived-mode-p 'org-roam-fztl-outline-mode)
-                    (delete-window window)
-                    (display-buffer buffer)))))
-            (window-list nil nil nil)))
+  (when org-roam-fztl-outline-window-mode
+    (setf (alist-get org-roam-fztl-outline-window--re-file display-buffer-alist)
+          `((display-buffer-in-side-window)
+            ,@(org-roam-fztl-outline-window--config side)))
+    (when-let* ((win (org-roam-fztl-outline-window--get)))
+      (let ((buf (window-buffer win)))
+        (with-current-buffer buf
+          (delete-window win)
+          (display-buffer buf))))))
 
 (defun org-roam-fztl-outline-window-top ()
   "Layout outline window to top."
@@ -834,16 +824,22 @@ If CLEAR is non-nil, remove the relevant `display-buffer-alist' entry."
   (org-roam-fztl-outline-window- 'left))
 
 (defun org-roam-fztl-outline-window-focus ()
-  "Put focus on outline window."
+  "Put focus on outline window.
+When called from a note with folgezettel ID, the point will be moved to the
+entry in the outline."
   (interactive)
-  (when org-roam-fztl-outline-window-mode
-    (seq-keep (lambda (window)
-                (let ((buffer (window-buffer window)))
-                  (with-current-buffer buffer
-                    (when (derived-mode-p 'org-roam-fztl-outline-mode)
-                      (select-window window)
-                      t))))
-              (window-list nil nil nil))))
+  (when-let* ((win (org-roam-fztl-outline-window--get)))
+    (if-let* ((node (org-roam-node-at-point))
+              (id (org-roam-node-id node))
+              (items (org-roam-fztl-fz--from-id id 'extra)))
+        (pcase-dolist (`(,fz ,outline-id ,pos) items)
+          (let* ((outline-node (org-roam-node-from-id outline-id))
+                 (file (org-roam-node-file outline-node))
+                 (buf (get-file-buffer file)))
+            (display-buffer buf)
+            (with-selected-window win
+              (goto-char pos))))
+      (select-window win))))
 
 (defun org-roam-fztl-outline-window-mode--on ()
   "Perform operations on `org-roam-fztl-outline-window-mode' activation."
@@ -894,8 +890,7 @@ If CLEAR is non-nil, remove the relevant `display-buffer-alist' entry."
   "s" #'org-roam-fztl-node-find-siblings
   "i c" #'org-roam-fztl-node-insert-child
   "i p" #'org-roam-fztl-node-insert-parent
-  "i s" #'org-roam-fztl-node-insert-sibling
-  "o" #'org-roam-fztl-node-jump-to-outline)
+  "i s" #'org-roam-fztl-node-insert-sibling)
 
 (defvar-keymap org-roam-fztl-mode-map
   :doc "Keymap for `org-roam-fztl-mode'.")
