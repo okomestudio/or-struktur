@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.1
+;; Version: 0.14.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -484,6 +484,10 @@ This function returns the newly created side window."
         (cons (if (member side '(top bottom))
                   #'window-height #'window-width)
               size)))
+    (with-current-buffer buffer
+      (when (org-roam-fztl-node-outline-p)
+        (unless (derived-mode-p 'org-roam-fztl-outline-mode)
+          (org-roam-fztl-outline-mode))))
     (display-buffer buffer
                     `(display-buffer-in-side-window
                       . ((side . ,side)
@@ -494,8 +498,7 @@ This function returns the newly created side window."
                           . ((no-delete-other-windows . t)
                              (no-other-window . t)
                              (mode-line-format . none)
-                             (dedicated . t))))))
-    (get-buffer-window buffer)))
+                             (dedicated . t))))))))
 
 (defun org-roam-fztl-outline-window--side (side)
   "Layout outline window to SIDE."
@@ -538,12 +541,16 @@ outline."
         (pcase-dolist (`(,fz ,outline-id ,pos) items)
           (let* ((outline-node (org-roam-node-from-id outline-id))
                  (file (org-roam-node-file outline-node))
-                 (buf (find-file-noselect file)))
+                 (buf (window-buffer win)))
             (delete-window win)
-            (with-selected-window
-                (org-roam-fztl-outline-window--display-buffer buf)
-              (goto-char pos))))
-      (select-window win))))
+            (kill-buffer buf)
+            (setq win (org-roam-fztl-outline-window--display-buffer
+                       (make-indirect-buffer
+                        (find-file-noselect file)
+                        org-roam-fztl-outline-window--buffer-name t)))
+            (select-window win 'norecord)
+            (goto-char pos)))
+      (select-window win 'norecord))))
 
 ;;;###autoload
 (defun org-roam-fztl-outline-window-on ()
@@ -560,16 +567,11 @@ outline."
            (node (alist-get (completing-read "Folgezettel outline: "
                                              options nil t)
                             options nil nil #'equal))
-           (file (org-roam-node-file node))
-           (buf (make-indirect-buffer
-                 (find-file-noselect file)
-                 org-roam-fztl-outline-window--buffer-name t))
-           (win (org-roam-fztl-outline-window--display-buffer buf)))
-        (with-current-buffer (window-buffer win)
-          (goto-char (point-min))
-          (when (org-roam-fztl-node-outline-p)
-            (unless (derived-mode-p 'org-roam-fztl-outline-mode)
-              (org-roam-fztl-outline-mode))))))))
+           (file (org-roam-node-file node)))
+        (org-roam-fztl-outline-window--display-buffer
+         (make-indirect-buffer
+          (find-file-noselect file)
+          org-roam-fztl-outline-window--buffer-name t))))))
 
 (defun org-roam-fztl-outline-window-off ()
   "Hide outline window."
