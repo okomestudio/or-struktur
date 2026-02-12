@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.4
+;; Version: 0.14.5
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -36,6 +36,21 @@
   "Settings for `org-roam-fztl'."
   :group 'extensions
   :link '(url-link "https://github.com/okomestudio/org-roam-fztl"))
+
+;;; Utilities
+
+(defmacro org-roam-fztl--debounce (delay &rest body)
+  "Run BODY after DELAY seconds of idle time, debouncing repeated invocations."
+  (declare (indent 1) (debug t))
+  (let ((timer-var (make-symbol (format "debounce-timer-%d" (sxhash body)))))
+    `(progn
+       (when (bound-and-true-p ,timer-var)
+         (cancel-timer ,timer-var))
+       (set (make-local-variable ',timer-var)
+            (run-with-idle-timer
+             ,delay nil
+             (lambda ()
+               ,@body))))))
 
 ;;; Folgezettel Operations
 
@@ -611,6 +626,22 @@ outline."
   :type '(repeat string)
   :group 'org-roam-fztl)
 
+(defun org-roam-fztl-outline--headline-link ()
+  "Get link on headline at point if exists."
+  (when-let*
+      ((raw (org-get-heading t t t t))
+       (parsed (org-element-parse-secondary-string raw '(link))))
+    (org-element-map parsed 'link #'identity nil t)))
+
+(defun org-roam-fztl-outline--headline-linked-node ()
+  "Get node linked on headline at point if exists."
+  (when-let*
+      ((lnk (org-roam-fztl-outline--headline-link))
+       (id (and (equal (org-element-property :type lnk) "id")
+                (org-element-property :path lnk)))
+       (node (org-roam-node-from-id id)))
+    node))
+
 (defun org-roam-fztl-outline-tags-refresh ()
   "Refresh tags in headline at point in outline node.
 Use `org-roam-fztl-outline-tags-exclude' to exclude tags from being added."
@@ -637,23 +668,14 @@ On each headline, refresh is performed by `org-roam-fztl-outline-tags-refresh'."
     (goto-char (point-min))
     (org-map-entries #'org-roam-fztl-outline-tags-refresh)))
 
-(defun org-roam-fztl-outline-preview ()
-  "Open node linked in current headline."
-  (when-let* ((raw-title (org-get-heading t t t t))
-              (parsed (org-element-parse-secondary-string raw-title '(link)))
-              (link (org-element-map parsed 'link #'identity nil t))
-              (link-type (and link (org-element-property :type link)))
-              (link-path (and link (org-element-property :path link)))
-              (id (and (equal link-type "id") link-path))
-              (node (org-roam-node-from-id id)))
-    (display-buffer (find-file-noselect (org-roam-node-file node))
-                    '((display-buffer-use-some-window)
-                      (inhibit-same-window . t)))))
-
 (defun org-roam-fztl-outline-preview-async ()
   "Async-open node linked in current headline."
   (when (org-at-heading-p)
-    (run-with-idle-timer 0.05 nil #'org-roam-fztl-outline-preview)))
+    (org-roam-fztl--debounce 0.2
+      (when-let* ((node (org-roam-fztl-outline--headline-linked-node)))
+        (display-buffer (find-file-noselect (org-roam-node-file node))
+                        '((display-buffer-use-some-window)
+                          (inhibit-same-window . t)))))))
 
 (defun org-roam-fztl-outline-preview-toggle ()
   "Toggle outline preview."
@@ -662,22 +684,6 @@ On each headline, refresh is performed by `org-roam-fztl-outline-tags-refresh'."
     (if (member #'org-roam-fztl-outline-preview-async post-command-hook)
         (remove-hook 'post-command-hook #'org-roam-fztl-outline-preview-async t)
       (add-hook 'post-command-hook #'org-roam-fztl-outline-preview-async nil t))))
-
-(defun org-roam-fztl-outline--headline-link ()
-  "Get link on headline at point if exists."
-  (when-let*
-      ((raw (org-get-heading t t t t))
-       (parsed (org-element-parse-secondary-string raw '(link))))
-    (org-element-map parsed 'link #'identity nil t)))
-
-(defun org-roam-fztl-outline--headline-linked-node ()
-  "Get node linked on headline at point if exists."
-  (when-let*
-      ((lnk (org-roam-fztl-outline--headline-link))
-       (id (and (equal (org-element-property :type lnk) "id")
-                (org-element-property :path lnk)))
-       (node (org-roam-node-from-id id)))
-    node))
 
 ;; Show node title in minibuffer
 
@@ -693,23 +699,14 @@ Either nil or `minibuffer' is allowed."
   :type 'number
   :group 'org-roam-fztl)
 
-(defvar-local org-roam-fztl-outline-show-title--timer nil)
-
 (defun org-roam-fztl-outline-show-title ()
   "Show note title in target specified in `org-roam-fztl-outline-show-title'."
-  (when org-roam-fztl-outline-show-title
-    (when (timerp org-roam-fztl-outline-show-title--timer)
-      (cancel-timer org-roam-fztl-outline-show-title--timer))
+  (org-roam-fztl--debounce org-roam-fztl-outline-show-title-delay
     (when-let* ((lnk (org-roam-fztl-outline--headline-link))
                 (contents (org-element-contents lnk))
                 (desc (org-element-interpret-data contents)))
       (when (eq org-roam-fztl-outline-show-title 'minibuffer)
-        (setq org-roam-fztl-outline-show-title--timer
-              (run-with-idle-timer
-               org-roam-fztl-outline-show-title-delay nil
-               (lambda ()
-                 (minibuffer-message "Note: %s" desc)
-                 (setq org-roam-fztl-outline-show-title--timer nil))))))))
+        (minibuffer-message "Note: %s" desc)))))
 
 ;; When outline buffer is modified, indicate with fringe color.
 
