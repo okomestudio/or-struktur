@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.2
+;; Version: 0.14.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -485,9 +485,12 @@ This function returns the newly created side window."
                   #'window-height #'window-width)
               size)))
     (with-current-buffer buffer
-      (when (org-roam-fztl-node-outline-p)
-        (unless (derived-mode-p 'org-roam-fztl-outline-mode)
-          (org-roam-fztl-outline-mode))))
+      (unless (derived-mode-p 'org-roam-fztl-outline-mode)
+        (org-roam-fztl-outline-mode)
+        (widen)
+        (goto-char (point-min))
+        (when (re-search-forward org-outline-regexp-bol nil t)
+          (narrow-to-region (point-at-bol) (point-max)))))
     (display-buffer buffer
                     `(display-buffer-in-side-window
                       . ((side . ,side)
@@ -547,7 +550,7 @@ outline."
             (setq win (org-roam-fztl-outline-window--display-buffer
                        (make-indirect-buffer
                         (find-file-noselect file)
-                        org-roam-fztl-outline-window--buffer-name t)))
+                        org-roam-fztl-outline-window--buffer-name nil)))
             (select-window win 'norecord)
             (goto-char pos)))
       (select-window win 'norecord))))
@@ -571,7 +574,7 @@ outline."
         (org-roam-fztl-outline-window--display-buffer
          (make-indirect-buffer
           (find-file-noselect file)
-          org-roam-fztl-outline-window--buffer-name t))))))
+          org-roam-fztl-outline-window--buffer-name nil))))))
 
 (defun org-roam-fztl-outline-window-off ()
   "Hide outline window."
@@ -820,6 +823,7 @@ if such a link exists."
   "V" #'org-roam-fztl-outline-preview-toggle
   "O" #'org-roam-fztl-outline-switch-node
   ;; "G" #'org-roam-fztl-outline-tags-refresh
+  "R" #'font-lock-fontify-buffer
 
   "v" #'org-roam-fztl-outline-org-return
   "<return>" #'org-roam-fztl-outline-org-return
