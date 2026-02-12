@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.3
+;; Version: 0.14.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -266,7 +266,7 @@ When EXTRA is non-nil, return also outline ID and position in it."
 
 (defcustom org-roam-fztl-overlay-text-placement 'before-string
   "Specify side of overlay to show rendered folgezettel."
-  :type '(choice 'before-string 'after-string)
+  :type '(choice before-string after-string)
   :group 'org-roam-fztl)
 
 (defun org-roam-fztl-overlay--put (beg end text)
@@ -428,12 +428,24 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
               (tags (org-roam-node-tags node)))
     (member org-roam-fztl-outline-tag tags)))
 
-(defun org-roam-fztl-node-outline-list ()
-  "Get folgezettel outline nodes."
-  (seq-keep (lambda (node)
-              (when (org-roam-fztl-node-outline-p node)
-                node))
-            (org-roam-node-list)))
+(defun org-roam-fztl-node-outline-list (&optional fun)
+  "Get folgezettel outline nodes.
+FUN is a function that takes an outline node as an argument and returns
+identify (default) or its transformation."
+  (let ((fun (or fun #'identity)))
+    (seq-keep (lambda (node)
+                (when (org-roam-fztl-node-outline-p node)
+                  (funcall fun node)))
+              (org-roam-node-list))))
+
+(defun org-roam-fztl-node-outline-select ()
+  "Select outline node interactively."
+  (when-let*
+      ((options (org-roam-fztl-node-outline-list
+                 (lambda (node)
+                   (cons (org-roam-node-title node) node)))))
+    (alist-get (completing-read "Folgezettel outline: " options nil t)
+               options nil nil #'equal)))
 
 ;;; Outline Window
 
@@ -487,6 +499,9 @@ This function returns the newly created side window."
     (with-current-buffer buffer
       (unless (derived-mode-p 'org-roam-fztl-outline-mode)
         (org-roam-fztl-outline-mode)
+        (setq-local repeat-mode nil) ; this mode is sluggish
+
+        ;; Narrow to headlines.
         (widen)
         (goto-char (point-min))
         (when (re-search-forward org-outline-regexp-bol nil t)
@@ -502,6 +517,12 @@ This function returns the newly created side window."
                              (no-other-window . t)
                              (mode-line-format . none)
                              (dedicated . t))))))))
+
+(defun org-roam-fztl-outline-window--display-indirect-buffer (file)
+  "Display indirect buffer visiting FILE."
+  (org-roam-fztl-outline-window--display-buffer
+   (make-indirect-buffer (find-file-noselect file)
+                         org-roam-fztl-outline-window--buffer-name)))
 
 (defun org-roam-fztl-outline-window--side (side)
   "Layout outline window to SIDE."
@@ -547,10 +568,8 @@ outline."
                  (buf (window-buffer win)))
             (delete-window win)
             (kill-buffer buf)
-            (setq win (org-roam-fztl-outline-window--display-buffer
-                       (make-indirect-buffer
-                        (find-file-noselect file)
-                        org-roam-fztl-outline-window--buffer-name nil)))
+            (setq win (org-roam-fztl-outline-window--display-indirect-buffer
+                       file))
             (select-window win 'norecord)
             (goto-char pos)))
       (select-window win 'norecord))))
@@ -562,19 +581,9 @@ outline."
       nil                     ; do nothing if window exists
     (if-let* ((buf (get-buffer org-roam-fztl-outline-window--buffer-name)))
         (org-roam-fztl-outline-window--display-buffer buf)
-      (when-let*
-          ((options (seq-keep (lambda (node)
-                                (when (org-roam-fztl-node-outline-p node)
-                                  (cons (org-roam-node-title node) node)))
-                              (org-roam-node-list)))
-           (node (alist-get (completing-read "Folgezettel outline: "
-                                             options nil t)
-                            options nil nil #'equal))
-           (file (org-roam-node-file node)))
-        (org-roam-fztl-outline-window--display-buffer
-         (make-indirect-buffer
-          (find-file-noselect file)
-          org-roam-fztl-outline-window--buffer-name nil))))))
+      (when-let* ((node (org-roam-fztl-node-outline-select))
+                  (file (org-roam-node-file node)))
+        (org-roam-fztl-outline-window--display-indirect-buffer file)))))
 
 (defun org-roam-fztl-outline-window-off ()
   "Hide outline window."
@@ -751,25 +760,20 @@ if such a link exists."
 (defun org-roam-fztl-outline-switch-node ()
   "Switch to different outline node."
   (interactive)
-  (org-roam-node-find nil nil #'org-roam-fztl-node-outline-p))
+  (when-let* ((node (org-roam-fztl-node-outline-select))
+              (win (org-roam-fztl-outline-window--get))
+              (buf (window-buffer win)))
+    (delete-window win)
+    (kill-buffer buf)
+    (setq win (org-roam-fztl-outline-window--display-indirect-buffer
+               (org-roam-node-file node)))
+    (select-window win 'norecord)))
 
 (defun org-roam-fztl-outline-edit ()
-  "Edit outline node normally."
+  "Edit outline node in base buffer."
   (interactive)
-  (let* ((node (org-roam-node-at-point))
-         (file (org-roam-node-file node))
-         (buf (find-file-noselect file))
-         (win (get-mru-window nil t t)))
-    (org-roam-fztl-outline-window-mode -1)
-    (display-buffer buf
-                    `((display-buffer-in-previous-window
-                       display-buffer-reuse-window
-                       display-buffer-use-some-window)
-                      (inhibit-same-window . t)
-                      (window . ,win)))
-    (with-current-buffer buf
-      (org-mode)
-      (read-only-mode -1))))
+  (when-let* ((node (org-roam-node-at-point)))
+    (org-roam-node-visit node)))
 
 (defmacro org-roam-fztl-outline--modify (&rest body)
   "Temporarily toggle `read-only-mode' while running BODY."
