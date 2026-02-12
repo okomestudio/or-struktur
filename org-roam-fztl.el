@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.5
+;; Version: 0.14.6
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -514,13 +514,18 @@ This function returns the newly created side window."
     (with-current-buffer buffer
       (unless (derived-mode-p 'org-roam-fztl-outline-mode)
         (org-roam-fztl-outline-mode)
-        (setq-local repeat-mode nil) ; this mode is sluggish
 
         ;; Narrow to headlines.
         (widen)
         (goto-char (point-min))
         (when (re-search-forward org-outline-regexp-bol nil t)
-          (narrow-to-region (point-at-bol) (point-max)))))
+          (narrow-to-region (point-at-bol) (point-max)))
+
+        (unless (and (or font-lock-mode jit-lock-mode)
+                     (not (text-property-not-all
+                           (window-start) (window-end nil t)
+                           'fontified nil)))
+          (font-lock-fontify-buffer))))
     (display-buffer buffer
                     `(display-buffer-in-side-window
                       . ((side . ,side)
