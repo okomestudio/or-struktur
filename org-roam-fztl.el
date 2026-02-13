@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.6
+;; Version: 0.14.7
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -780,11 +780,18 @@ if such a link exists."
 (defmacro org-roam-fztl-outline--modify (&rest body)
   "Temporarily toggle `read-only-mode' while running BODY."
   `(let* ((inhibit-read-only t))
+     (read-only-mode -1)
      (unwind-protect
-         (progn
-           (read-only-mode -1)
-           ,@body
-           (save-buffer))
+         (condition-case err
+             (progn
+               ,@body
+               (when (buffer-modified-p)
+                 (save-buffer)))
+           (quit              ; catch quit from `completing-read'
+            (revert-buffer nil t))
+           (error
+            (message "General error: %s" err)
+            (revert-buffer nil t)))
        (read-only-mode +1))))
 
 (defun org-roam-fztl-outline-insert-child ()
