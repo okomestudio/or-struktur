@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.8
+;; Version: 0.14.9
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -860,6 +860,13 @@ if such a link exists."
 (define-derived-mode org-roam-fztl-outline-mode org-mode "fztl"
   "Major mode for folgezettel outline mode."
   :group 'org-roam
+  ;; Load directory local variables, as indirect buffers do not load them by
+  ;; default.
+  (when-let*
+      ((base (buffer-base-buffer))
+       (default-directory (buffer-local-value 'default-directory base)))
+    (hack-dir-local-variables-non-file-buffer))
+
   (read-only-mode 1)
   (setq-local org-use-speed-commands nil)
 
