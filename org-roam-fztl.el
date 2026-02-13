@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.7
+;; Version: 0.14.8
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -837,11 +837,24 @@ if such a link exists."
   "O" #'org-roam-fztl-outline-switch-node
   ;; "G" #'org-roam-fztl-outline-tags-refresh
   "R" #'font-lock-fontify-buffer
+  "I" #'imenu
 
   "v" #'org-roam-fztl-outline-org-return
   "<return>" #'org-roam-fztl-outline-org-return
 
   "o" #'org-roam-fztl-outline-node-open)
+
+(defmacro org-roam-fztl--disable-command (mode command)
+  "Disable COMMAND in major MODE."
+  (let* ((command-s
+          (replace-regexp-in-string "[\\#']" "" (format "%s" command)))
+         (mode-s (replace-regexp-in-string "'" "" (format "%s" mode)))
+         (fun (make-symbol (format "%s--disable-in-%s" command-s mode-s))))
+    `(progn
+       (defun ,fun (&rest _)
+         (when (derived-mode-p ',mode)
+           (user-error "%s is disabled in %s" ,command-s ,mode-s)))
+       (advice-add ,command :before #',fun))))
 
 ;;;###autoload
 (define-derived-mode org-roam-fztl-outline-mode org-mode "fztl"
@@ -853,6 +866,15 @@ if such a link exists."
   ;; (set-keymap-parent org-roam-fztl-outline-mode-map nil)
   (keymap-global-set "C-c f o" #'org-roam-fztl-outline-window-focus)
 
+  ;; Disable input method
+  (make-local-variable 'current-input-method)
+  (setq current-input-method nil)
+  (make-local-variable 'default-input-method)
+  (setq default-input-method nil)
+  (org-roam-fztl--disable-command 'org-roam-fztl-outline-mode
+                                  #'toggle-input-method)
+
+  ;; Hooks
   (add-hook 'post-command-hook
             #'org-roam-fztl-outline-modified--change-fringe nil t)
   (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
