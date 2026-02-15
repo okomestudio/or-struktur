@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.9
+;; Version: 0.14.10
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -51,6 +51,18 @@
              ,delay nil
              (lambda ()
                ,@body))))))
+
+(defmacro org-roam-fztl--disable-command (mode command)
+  "Disable COMMAND in major MODE."
+  (let* ((command-s
+          (replace-regexp-in-string "[\\#']" "" (format "%s" command)))
+         (mode-s (replace-regexp-in-string "'" "" (format "%s" mode)))
+         (fun (make-symbol (format "%s--disable-in-%s" command-s mode-s))))
+    `(progn
+       (defun ,fun (&rest _)
+         (when (derived-mode-p ',mode)
+           (user-error "%s is disabled in %s" ,command-s ,mode-s)))
+       (advice-add ,command :before #',fun))))
 
 ;;; Folgezettel Operations
 
@@ -438,7 +450,9 @@ The function FILTER-FN takes a folgezettel and returns related folgezettels."
   (org-roam-fztl-node--op 'insert #'org-roam-fztl-fz--get-siblings))
 
 (defun org-roam-fztl-node-outline-p (&optional node)
-  "Return non-nil if NODE is folgezettel outline."
+  "Return non-nil if NODE is folgezettel outline.
+A folgezettel outline is defined as an Org document with one of its file tags
+being `org-roam-fztl-outline-tag'."
   (when-let* ((node (or node (org-roam-node-at-point)))
               (tags (org-roam-node-tags node)))
     (member org-roam-fztl-outline-tag tags)))
@@ -501,6 +515,15 @@ When not given, SIDE defaults to the first entry in `org-roam-fztl-outline-windo
   "Return outline window if it is in use."
   (get-buffer-window org-roam-fztl-outline-window--buffer-name t))
 
+(defun org-roam-fztl-outline-window--font-lock-sync (beg end)
+  "Fontify indirect buffer from BEG to END."
+  (when (and (buffer-base-buffer)
+             (buffer-live-p (buffer-base-buffer)))
+    (with-current-buffer (buffer-base-buffer)
+      (when (text-property-any beg end 'fontified nil (current-buffer))
+        (font-lock-flush beg end)
+        (font-lock-ensure beg end)))))
+
 (defun org-roam-fztl-outline-window--display-buffer (buffer &optional side)
   "Display SIDE window for outline BUFFER.
 This function returns the newly created side window."
@@ -513,19 +536,7 @@ This function returns the newly created side window."
               size)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'org-roam-fztl-outline-mode)
-        (org-roam-fztl-outline-mode)
-
-        ;; Narrow to headlines.
-        (widen)
-        (goto-char (point-min))
-        (when (re-search-forward org-outline-regexp-bol nil t)
-          (narrow-to-region (point-at-bol) (point-max)))
-
-        (unless (and (or font-lock-mode jit-lock-mode)
-                     (not (text-property-not-all
-                           (window-start) (window-end nil t)
-                           'fontified nil)))
-          (font-lock-fontify-buffer))))
+        (org-roam-fztl-outline-mode)))
     (display-buffer buffer
                     `(display-buffer-in-side-window
                       . ((side . ,side)
@@ -837,24 +848,12 @@ if such a link exists."
   "O" #'org-roam-fztl-outline-switch-node
   ;; "G" #'org-roam-fztl-outline-tags-refresh
   "R" #'font-lock-fontify-buffer
-  "I" #'imenu
 
+  "i" #'imenu
   "v" #'org-roam-fztl-outline-org-return
   "<return>" #'org-roam-fztl-outline-org-return
 
   "o" #'org-roam-fztl-outline-node-open)
-
-(defmacro org-roam-fztl--disable-command (mode command)
-  "Disable COMMAND in major MODE."
-  (let* ((command-s
-          (replace-regexp-in-string "[\\#']" "" (format "%s" command)))
-         (mode-s (replace-regexp-in-string "'" "" (format "%s" mode)))
-         (fun (make-symbol (format "%s--disable-in-%s" command-s mode-s))))
-    `(progn
-       (defun ,fun (&rest _)
-         (when (derived-mode-p ',mode)
-           (user-error "%s is disabled in %s" ,command-s ,mode-s)))
-       (advice-add ,command :before #',fun))))
 
 ;;;###autoload
 (define-derived-mode org-roam-fztl-outline-mode org-mode "fztl"
@@ -868,7 +867,6 @@ if such a link exists."
     (hack-dir-local-variables-non-file-buffer))
 
   (read-only-mode 1)
-  (setq-local org-use-speed-commands nil)
 
   ;; (set-keymap-parent org-roam-fztl-outline-mode-map nil)
   (keymap-global-set "C-c f o" #'org-roam-fztl-outline-window-focus)
@@ -881,14 +879,47 @@ if such a link exists."
   (org-roam-fztl--disable-command 'org-roam-fztl-outline-mode
                                   #'toggle-input-method)
 
-  ;; Hooks
+  ;; Narrow to contents.
+  (widen)
+  (goto-char (point-min))
+  (when (re-search-forward org-outline-regexp-bol nil t)
+    (narrow-to-region (point-at-bol) (point-max))))
+
+(defun org-roam-fztl-outline-mode--on-after-change (beg end len)
+  (org-roam-fztl-outline-window--font-lock-sync beg end))
+
+(defun org-roam-fztl-outline-mode--on-window-scroll (win beg)
+  (let ((end (window-end win t)))
+    (org-roam-fztl-outline-window--font-lock-sync beg end)))
+
+(defun org-roam-fztl-outline-mode--on-window-state-change (win)
+  (org-roam-fztl-outline-window--font-lock-sync (window-start) (window-end)))
+
+(defun org-roam-fztl-outline-mode--on-post-node-insert (id desc)
+  (org-roam-fztl-outline-tags-refresh))
+
+(defun org-roam-fztl-outline-mode--setup-hooks ()
+  "Set up hooks for `org-roam-fztl-outline-mode'."
+  (add-hook 'after-change-functions
+            #'org-roam-fztl-outline-mode--on-after-change
+            nil t)
+  (add-hook 'window-scroll-functions
+            #'org-roam-fztl-outline-mode--on-window-scroll
+            nil t)
+  (add-hook 'window-state-change-functions
+            #'org-roam-fztl-outline-mode--on-window-state-change
+            nil t)
   (add-hook 'post-command-hook
-            #'org-roam-fztl-outline-modified--change-fringe nil t)
-  (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
-  (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t)
+            #'org-roam-fztl-outline-modified--change-fringe
+            nil t)
   (add-hook 'org-roam-post-node-insert-hook
-            (lambda (id desc) (org-roam-fztl-outline-tags-refresh)) 99 t)
-  (add-hook 'post-command-hook #'org-roam-fztl-outline-show-title nil t))
+            #'org-roam-fztl-outline-mode--on-post-node-insert
+            99 t)
+  (add-hook 'post-command-hook #'org-roam-fztl-outline-show-title
+            nil t))
+
+(add-hook 'org-roam-fztl-outline-mode-hook
+          #'org-roam-fztl-outline-mode--setup-hooks)
 
 ;;; Minor Mode (org-roam-fztl-mode)
 
@@ -915,6 +946,12 @@ if such a link exists."
 (defun org-roam-fztl-mode--on ()
   "Activate `org-roam-fztl-mode'."
   (add-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe)
+  (when (org-roam-fztl-node-outline-p)
+    (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
+    (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 98 t)
+    ;; (add-hook 'after-save-hook #'org-roam-fztl-outline--display-refresh 99 t)
+    ;; (add-hook 'after-change-major-mode-hook #'org-roam-fztl-outline--display-refresh 99 t)
+    )
   (add-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh 99 t)
   (add-hook 'after-change-functions #'org-roam-fztl-overlay--refresh 99 t))
 
@@ -922,6 +959,11 @@ if such a link exists."
   "Deactivate `org-roam-fztl-mode'."
   (remove-hook 'after-change-functions #'org-roam-fztl-overlay--refresh t)
   (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t)
+  (when (org-roam-fztl-node-outline-p)
+    ;; (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-outline--display-refresh t)
+    ;; (remove-hook 'after-save-hook #'org-roam-fztl-outline--display-refresh t)
+    (remove-hook 'after-save-hook #'org-roam-fztl-overlay--refresh t)
+    (remove-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node t))
   (remove-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe))
 
 ;;;###autoload
