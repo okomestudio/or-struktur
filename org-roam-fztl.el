@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.15.2
+;; Version: 0.15.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -696,17 +696,16 @@ Use `org-roam-fztl-outline-tags-exclude' to exclude tags from being added."
   (interactive)
   (when (not (org-at-heading-p))
     (warn "Point not on Org headline"))
-  (let* ((raw-title (org-get-heading t t t t))
-         (parsed (org-element-parse-secondary-string raw-title '(link)))
-         (link (org-element-map parsed 'link #'identity nil t))
-         (link-type (and link (org-element-property :type link)))
-         (link-path (and link (org-element-property :path link)))
-         (id (and (equal link-type "id") link-path)))
-    (when-let* ((node (org-roam-node-from-id id))
-                (tags (cl-set-difference (org-roam-node-tags node)
-                                         org-roam-fztl-outline-tags-exclude
-                                         :test #'equal)))
-      (org-set-tags tags))))
+  (when-let*
+      ((lnk (org-roam-fztl-outline--headline-link))
+       (lnk-type (and lnk (org-element-property :type lnk)))
+       (lnk-path (and lnk (org-element-property :path lnk)))
+       (id (and (equal lnk-type "id") lnk-path))
+       (node (org-roam-node-from-id id))
+       (tags (cl-set-difference (org-roam-node-tags node)
+                                org-roam-fztl-outline-tags-exclude
+                                :test #'equal)))
+    (org-set-tags tags)))
 
 (defun org-roam-fztl-outline-tags-refresh-all ()
   "Refresh tags in all headlines in outline node.
@@ -862,6 +861,12 @@ if such a link exists."
    (org-mark-subtree)
    (call-interactively #'kill-region)))
 
+(defun org-roam-fztl-outline-refresh-tags ()
+  "Refresh tags."
+  (interactive)
+  (org-roam-fztl-outline--modify
+   (call-interactively #'org-roam-fztl-outline-tags-refresh)))
+
 (defvar-keymap org-roam-fztl-outline-mode-map
   :doc "Keymap for `org-roam-fztl-mode' under prefix."
   ;; Similar to org-speed-command:
@@ -880,7 +885,7 @@ if such a link exists."
   "S" #'org-roam-fztl-outline-insert-sibling
   "D" #'org-roam-fztl-outline-delete-subtree
   "E" #'org-roam-fztl-outline-edit
-  "T" #'org-roam-fztl-outline-tags-refresh
+  "T" #'org-roam-fztl-outline-refresh-tags
 
   "O" #'org-roam-fztl-outline-switch-node
   "R" #'font-lock-fontify-buffer
