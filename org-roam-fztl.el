@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.14.10
+;; Version: 0.15.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -228,8 +228,7 @@ When EXTRA is non-nil, return also outline ID and position in it."
   (dolist (node (org-roam-fztl-node-outline-list))
     (let* ((buffer (find-file-noselect (org-roam-node-file node))))
       (with-current-buffer buffer
-        (org-roam-fztl--mapping-from-outline-node (org-roam-node-id node))
-        (org-roam-fztl-overlay--refresh)))))
+        (org-roam-fztl--mapping-from-outline-node (org-roam-node-id node))))))
 
 (defun org-roam-fztl--mapping-init-maybe ()
   "If mapping storage is empty, initialize."
@@ -509,11 +508,15 @@ When not given, SIDE defaults to the first entry in `org-roam-fztl-outline-windo
   (car org-roam-fztl-outline-window-layout))
 
 (defconst org-roam-fztl-outline-window--buffer-name " outline buffer"
-  "Name of (indirect) buffer visiting outline node file.")
+  "Name of indirect buffer visiting outline node file.")
 
 (defun org-roam-fztl-outline-window--get ()
   "Return outline window if it is in use."
-  (get-buffer-window org-roam-fztl-outline-window--buffer-name t))
+  (seq-find (lambda (win)
+              (when-let* ((buf (window-buffer win)))
+                (with-current-buffer buf
+                  (derived-mode-p 'org-roam-fztl-outline-mode))))
+            (window-list)))
 
 (defun org-roam-fztl-outline-window--font-lock-sync (beg end)
   "Fontify indirect buffer from BEG to END."
@@ -549,11 +552,16 @@ This function returns the newly created side window."
                              (mode-line-format . none)
                              (dedicated . t))))))))
 
-(defun org-roam-fztl-outline-window--display-indirect-buffer (file)
-  "Display indirect buffer visiting FILE."
-  (org-roam-fztl-outline-window--display-buffer
-   (make-indirect-buffer (find-file-noselect file)
-                         org-roam-fztl-outline-window--buffer-name)))
+(defun org-roam-fztl-outline-window--display-indirect-buffer (node)
+  "Display indirect buffer of NODE."
+  (let* ((name (format "%s<%s>"
+                       org-roam-fztl-outline-window--buffer-name
+                       (org-roam-node-id node)))
+         (buf (or (get-buffer name)
+                  (make-indirect-buffer
+                   (find-file-noselect (org-roam-node-file node))
+                   name))))
+    (org-roam-fztl-outline-window--display-buffer buf)))
 
 (defun org-roam-fztl-outline-window--side (side)
   "Layout outline window to SIDE."
@@ -583,41 +591,59 @@ This function returns the newly created side window."
   (interactive)
   (org-roam-fztl-outline-window--side 'left))
 
+;;;###autoload
 (defun org-roam-fztl-outline-window-focus ()
   "Put focus on outline window.
-When called from a folgezettel, the point will be moved to the entry in its
+If the current node is a folgezettel, the point will be on the entry in the
 outline."
   (interactive)
-  (when-let* ((win (org-roam-fztl-outline-window--get)))
-    (if-let* ((node (and (derived-mode-p 'org-mode)
-                         (org-roam-node-at-point)))
-              (id (org-roam-node-id node))
-              (items (org-roam-fztl-fz--from-id id 'extra)))
-        (pcase-dolist (`(,fz ,outline-id ,pos) items)
-          (let* ((outline-node (org-roam-node-from-id outline-id))
-                 (file (org-roam-node-file outline-node))
-                 (buf (window-buffer win)))
-            (delete-window win)
-            (kill-buffer buf)
+  (org-roam-fztl-outline-window-on 'focus))
+
+(defun org-roam-fztl-outline-window-on (&optional focus)
+  "Show outline window.
+If FOCUS is non-nil and the current node is a folgezettel, the point will be on
+the entry in the outline."
+  (let ((win (org-roam-fztl-outline-window--get))
+        target-pos)
+    (when-let*
+        ((node (and (derived-mode-p 'org-mode) (org-roam-node-at-point)))
+         (id (and node (org-roam-node-id node)))
+         (items (and id (org-roam-fztl-fz--from-id id 'extra))))
+      (let ((item (seq-find
+                   (lambda (item)
+                     (pcase-let*
+                         ((`(,fz ,outline-id ,pos) item)
+                          (outline-node (org-roam-node-from-id outline-id))
+                          (file (org-roam-node-file outline-node)))
+                       (when (and win
+                                  (eq (buffer-base-buffer (window-buffer win))
+                                      (find-buffer-visiting file)))
+                         (setq target-pos pos)
+                         t)))
+                   items)))
+        (unless item
+          ;; No window displaying matching indirect buffer exists.
+          (pcase-let* ((`(,fz ,outline-id ,pos) (car items))
+                       (outline-node (org-roam-node-from-id outline-id)))
+            (when win
+              (delete-window win))
             (setq win (org-roam-fztl-outline-window--display-indirect-buffer
-                       file))
-            (select-window win 'norecord)
-            (goto-char pos)))
+                       outline-node)
+                  target-pos pos)))))
+    (unless win
+      (setq win (org-roam-fztl-outline-window--display-indirect-buffer
+                 (org-roam-fztl-node-outline-select))))
+    (when target-pos
+      (with-selected-window win
+        (goto-char target-pos)
+        (org-reveal)
+        (recenter)))
+    (when (and focus win)
       (select-window win 'norecord))))
 
-;;;###autoload
-(defun org-roam-fztl-outline-window-on ()
-  "Show outline window."
-  (if-let* ((win (org-roam-fztl-outline-window--get)))
-      nil                     ; do nothing if window exists
-    (if-let* ((buf (get-buffer org-roam-fztl-outline-window--buffer-name)))
-        (org-roam-fztl-outline-window--display-buffer buf)
-      (when-let* ((node (org-roam-fztl-node-outline-select))
-                  (file (org-roam-node-file node)))
-        (org-roam-fztl-outline-window--display-indirect-buffer file)))))
-
 (defun org-roam-fztl-outline-window-off ()
-  "Hide outline window."
+  "Hide outline window.
+Returns non-nil if an outline window exists and is deleted."
   (when-let* ((win (org-roam-fztl-outline-window--get)))
     (delete-window win)
     t))
@@ -778,8 +804,7 @@ if such a link exists."
               (buf (window-buffer win)))
     (delete-window win)
     (kill-buffer buf)
-    (setq win (org-roam-fztl-outline-window--display-indirect-buffer
-               (org-roam-node-file node)))
+    (setq win (org-roam-fztl-outline-window--display-indirect-buffer node))
     (select-window win 'norecord)))
 
 (defun org-roam-fztl-outline-edit ()
@@ -855,6 +880,8 @@ if such a link exists."
 
   "o" #'org-roam-fztl-outline-node-open)
 
+(keymap-global-set "C-c f o" #'org-roam-fztl-outline-window-focus)
+
 ;;;###autoload
 (define-derived-mode org-roam-fztl-outline-mode org-mode "fztl"
   "Major mode for folgezettel outline mode."
@@ -869,7 +896,6 @@ if such a link exists."
   (read-only-mode 1)
 
   ;; (set-keymap-parent org-roam-fztl-outline-mode-map nil)
-  (keymap-global-set "C-c f o" #'org-roam-fztl-outline-window-focus)
 
   ;; Disable input method
   (make-local-variable 'current-input-method)
@@ -898,6 +924,11 @@ if such a link exists."
 (defun org-roam-fztl-outline-mode--on-post-node-insert (id desc)
   (org-roam-fztl-outline-tags-refresh))
 
+(defun org-roam-fztl-outline-mode--on-window-buffer-change (win)
+  (let ((beg (window-start win))
+        (end (window-end win t)))
+    (org-roam-fztl-outline-window--font-lock-sync beg end)))
+
 (defun org-roam-fztl-outline-mode--setup-hooks ()
   "Set up hooks for `org-roam-fztl-outline-mode'."
   (add-hook 'after-change-functions
@@ -916,7 +947,10 @@ if such a link exists."
             #'org-roam-fztl-outline-mode--on-post-node-insert
             99 t)
   (add-hook 'post-command-hook #'org-roam-fztl-outline-show-title
-            nil t))
+            nil t)
+  (add-hook 'window-buffer-change-functions
+            #'org-roam-fztl-outline-mode--on-window-buffer-change
+            99 t))
 
 (add-hook 'org-roam-fztl-outline-mode-hook
           #'org-roam-fztl-outline-mode--setup-hooks)
@@ -943,25 +977,27 @@ if such a link exists."
 
 (keymap-set org-roam-fztl-mode-map org-roam-fztl-mode-prefix org-roam-fztl-mode-prefix-map)
 
+(defun org-roam-fztl-mode--on-window-scroll (win beg)
+  (let ((end (window-end win t)))
+    (org-roam-fztl-overlay--refresh beg end (- end beg))))
+
 (defun org-roam-fztl-mode--on ()
   "Activate `org-roam-fztl-mode'."
   (add-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe)
   (when (org-roam-fztl-node-outline-p)
     (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
-    (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 98 t)
-    ;; (add-hook 'after-save-hook #'org-roam-fztl-outline--display-refresh 99 t)
-    ;; (add-hook 'after-change-major-mode-hook #'org-roam-fztl-outline--display-refresh 99 t)
-    )
-  (add-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh 99 t)
+    (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t))
+  (add-hook 'window-scroll-functions
+            #'org-roam-fztl-mode--on-window-scroll
+            99 t)
   (add-hook 'after-change-functions #'org-roam-fztl-overlay--refresh 99 t))
 
 (defun org-roam-fztl-mode--off ()
   "Deactivate `org-roam-fztl-mode'."
   (remove-hook 'after-change-functions #'org-roam-fztl-overlay--refresh t)
-  (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-overlay--refresh t)
+  (remove-hook 'window-scroll-functions
+               #'org-roam-fztl-mode--on-window-scroll t)
   (when (org-roam-fztl-node-outline-p)
-    ;; (remove-hook 'after-change-major-mode-hook #'org-roam-fztl-outline--display-refresh t)
-    ;; (remove-hook 'after-save-hook #'org-roam-fztl-outline--display-refresh t)
     (remove-hook 'after-save-hook #'org-roam-fztl-overlay--refresh t)
     (remove-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node t))
   (remove-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe))
