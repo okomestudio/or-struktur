@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.15.1
+;; Version: 0.15.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -566,10 +566,16 @@ This function returns the newly created side window."
 (defun org-roam-fztl-outline-window--side (side)
   "Layout outline window to SIDE."
   (when-let* ((win (org-roam-fztl-outline-window--get)))
-    (let ((buf (window-buffer win)))
+    (let ((buf (window-buffer win))
+          (target-pos (and (eq win (selected-window))
+                           (point))))
       (delete-window win)
-      (with-current-buffer buf
-        (org-roam-fztl-outline-window--display-buffer buf side)))))
+      (setq win (org-roam-fztl-outline-window--display-buffer buf side))
+      (when target-pos
+        (select-window win)
+        (goto-char target-pos)
+        (org-reveal)
+        (recenter)))))
 
 (defun org-roam-fztl-outline-window-top ()
   "Layout outline window to top."
@@ -581,7 +587,7 @@ This function returns the newly created side window."
   (interactive)
   (org-roam-fztl-outline-window--side 'right))
 
-(defun org-roam-fztl-outline-window-botton ()
+(defun org-roam-fztl-outline-window-bottom ()
   "Layout outline window to bottom."
   (interactive)
   (org-roam-fztl-outline-window--side 'bottom))
@@ -865,22 +871,25 @@ if such a link exists."
   "b" #'org-backward-heading-same-level
   "u" #'outline-up-heading
 
+  "i" #'imenu
+  "o" #'org-roam-fztl-outline-node-open
+  "v" #'org-roam-fztl-outline-org-return
+  "<return>" #'org-roam-fztl-outline-org-return
+
   "C" #'org-roam-fztl-outline-insert-child
   "S" #'org-roam-fztl-outline-insert-sibling
   "D" #'org-roam-fztl-outline-delete-subtree
   "E" #'org-roam-fztl-outline-edit
-  "V" #'org-roam-fztl-outline-preview-toggle
+  "T" #'org-roam-fztl-outline-tags-refresh
+
   "O" #'org-roam-fztl-outline-switch-node
-  ;; "G" #'org-roam-fztl-outline-tags-refresh
   "R" #'font-lock-fontify-buffer
+  "V" #'org-roam-fztl-outline-preview-toggle
 
-  "i" #'imenu
-  "v" #'org-roam-fztl-outline-org-return
-  "<return>" #'org-roam-fztl-outline-org-return
-
-  "o" #'org-roam-fztl-outline-node-open)
-
-(keymap-global-set "C-c f o" #'org-roam-fztl-outline-window-focus)
+  "W t" #'org-roam-fztl-outline-window-top
+  "W r" #'org-roam-fztl-outline-window-right
+  "W b" #'org-roam-fztl-outline-window-bottom
+  "W l" #'org-roam-fztl-outline-window-left)
 
 ;;;###autoload
 (define-derived-mode org-roam-fztl-outline-mode org-mode "fztl"
