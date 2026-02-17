@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.15.3
+;; Version: 0.15.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -228,7 +228,7 @@ When EXTRA is non-nil, return also outline ID and position in it."
   (dolist (node (org-roam-fztl-node-outline-list))
     (let* ((buffer (find-file-noselect (org-roam-node-file node))))
       (with-current-buffer buffer
-        (org-roam-fztl--mapping-from-outline-node (org-roam-node-id node))))))
+        (org-roam-fztl--mapping-from-outline-node)))))
 
 (defun org-roam-fztl--mapping-init-maybe ()
   "If mapping storage is empty, initialize."
@@ -237,12 +237,10 @@ When EXTRA is non-nil, return also outline ID and position in it."
 
 ;;; TODO(2026-02-05): Improve the algorithm by performing update on affected
 ;;; tree.
-(defun org-roam-fztl--mapping-from-outline-node (&optional outline-id)
+(defun org-roam-fztl--mapping-from-outline-node ()
   "Parse current outline buffer to update mapping storage."
   (when-let*
-      ((node (or (and outline-id (org-roam-node-from-id outline-id))
-                 (save-excursion (goto-char (point-min))
-                                 (org-roam-node-at-point))))
+      ((node (org-roam-node-at-point))
        (outline-id (and (org-roam-fztl-node-outline-p node)
                         (org-roam-node-id node)))
        (start (string-to-number
@@ -250,6 +248,7 @@ When EXTRA is non-nil, return also outline ID and position in it."
                    "0")))
        (stage (make-hash-table :test #'equal))
        (fz `(,start)))
+    (message "Parsing outline buffer %s..." (current-buffer))
     ;; Stage existing ID-folgezettel mapping.
     (maphash
      (lambda (k vs)
