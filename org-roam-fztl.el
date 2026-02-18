@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.15.4
+;; Version: 0.15.5
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -63,6 +63,18 @@
          (when (derived-mode-p ',mode)
            (user-error "%s is disabled in %s" ,command-s ,mode-s)))
        (advice-add ,command :before #',fun))))
+
+(defmacro org-roam-fztl--narrow-and-eval (beg end &rest body)
+  "Narrow to region from BEG to END and evaluate BODY."
+  (declare (indent 2))
+  `(let ((beg (or ,beg (point-min)))
+         (end (or ,end (point-max))))
+     (message "Narrow %s from %s to %s" (current-buffer) beg end)
+     (when (> (- end beg) 1)
+       (save-excursion
+         (save-restriction
+           (narrow-to-region beg end)
+           ,@body)))))
 
 ;;; Folgezettel Operations
 
@@ -264,13 +276,12 @@ When EXTRA is non-nil, return also outline ID and position in it."
         (let ((level (org-element-property :level elmt)))
           (setq fz (org-roam-fztl-fz--resize fz level))
           (org-roam-fztl-fz--lsd-inc fz)
-          (when-let* ((lnk (org-element-map
-                               (org-element-property :title elmt)
-                               'link #'identity nil 'first-match))
-                      (type (org-element-property :type lnk))
-                      (id (and (equal type "id")
-                               (org-element-property :path lnk)))
-                      (pos (org-element-property :begin lnk)))
+          (when-let*
+              ((lnk (org-element-map (org-element-property :title elmt) 'link
+                      #'identity nil 'first-match))
+               (id (and (equal (org-element-property :type lnk) "id")
+                        (org-element-property :path lnk)))
+               (pos (org-element-property :begin lnk)))
             (when (gethash (cons id fz) stage)
               (remhash (cons id fz) stage))
             (org-roam-fztl--mapping-put id fz outline-id pos)))))
@@ -319,68 +330,61 @@ When EXTRA is non-nil, return also outline ID and position in it."
                          fzs)
                  "")))
 
-(defmacro org-roam-fztl-overlay--region (beg end len &rest body)
-  "Initialize BEG, END, and LEN before running BODY.
-BODY is not run if LEN is nil or zero. If BEG or END is nil, the bound will be
-set to the whole buffer with `point-min' or `point-max'."
-  (declare (indent defun))
-  `(when (or (null len) (> len 0))
-     (setq beg (or beg (point-min)) end (or end (point-max)))
-     (save-excursion
-       (save-restriction
-         (narrow-to-region beg end)
-         ,@body))))
-
-(defun org-roam-fztl-overlay--render-in-title (&optional beg end len)
+(defun org-roam-fztl-overlay--render-in-title ()
   "Render folgezettel overlays in document title.
-The title is obtained from `#+title:'. For BEG, END, and LEN, see
-`org-roam-fztl-overlay--region'."
-  (org-roam-fztl-overlay--region beg end len
-    (goto-char beg)
-    (when-let* ((node (org-roam-node-at-point))
-                (ovt (org-roam-fztl-overlay--format (org-roam-node-id node))))
-      (when (re-search-forward "^#\\+TITLE:[ \t]*\\(.*\\)$" end t)
-        (org-roam-fztl-overlay--put (match-beginning 1) (match-end 1) ovt)))))
+The title is obtained from `#+title:'."
+  (goto-char (point-min))     ; this respects narrowing
+  (when-let* ((node (org-roam-node-at-point))
+              (ovt (org-roam-fztl-overlay--format (org-roam-node-id node))))
+    (when (re-search-forward "^#\\+TITLE:[ \t]*\\(.*\\)$" (point-max) t)
+      (org-roam-fztl-overlay--put (match-beginning 1) (match-end 1) ovt))))
 
-(defun org-roam-fztl-overlay--render-in-headlines (&optional beg end len)
+(defun org-roam-fztl-overlay--render-in-headlines ()
   "Render folgezettel overlays in headlines.
-IDs are extracted from headline properties. For BEG, END, and LEN, see
-`org-roam-fztl-overlay--region'."
-  (org-roam-fztl-overlay--region beg end len
-    (org-element-map (org-element-parse-buffer) 'headline
-      (lambda (elmt)
-        (when-let* ((id (org-element-property :ID elmt))
-                    (ovt (org-roam-fztl-overlay--format id))
-                    (beg (org-element-property :title-begin elmt))
-                    (end (org-element-property :title-end elmt)))
-          (org-roam-fztl-overlay--put beg end ovt))))))
+IDs are extracted from headline properties."
+  (org-element-map (org-element-parse-buffer) 'headline
+    (lambda (elmt)
+      (when-let* ((id (org-element-property :ID elmt))
+                  (ovt (org-roam-fztl-overlay--format id))
+                  (beg (org-element-property :title-begin elmt))
+                  (end (org-element-property :title-end elmt)))
+        (org-roam-fztl-overlay--put beg end ovt)))))
 
-(defun org-roam-fztl-overlay--render-in-links (&optional beg end len)
-  "Render folgezettel overlays in Org links.
-For BEG, END, and LEN, see `org-roam-fztl-overlay--region'."
-  (org-roam-fztl-overlay--region beg end len
-    (org-element-map (org-element-parse-buffer) 'link
-      (lambda (elmt)
-        (when-let* ((id (and (string= (org-element-property :type elmt) "id")
-                             (org-element-property :path elmt)))
-                    (ovt (org-roam-fztl-overlay--format id))
-                    (beg (org-element-property :begin elmt))
-                    (end (org-element-property :end elmt)))
-          (org-roam-fztl-overlay--put beg end ovt))))))
+(defun org-roam-fztl-overlay--render-link (elmt)
+  "Render folgezettel ID overlay for link ELMT."
+  (when-let* ((id (and (string= (org-element-property :type elmt) "id")
+                       (org-element-property :path elmt)))
+              (ovt (org-roam-fztl-overlay--format id))
+              (beg (org-element-property :begin elmt))
+              (end (org-element-property :end elmt)))
+    (remove-overlays beg end 'category 'fztl)
+    (org-roam-fztl-overlay--put beg end ovt)))
 
-(defun org-roam-fztl-overlay--remove (&optional beg end len)
-  "Remove folgezettel overlays in region.
-For BEG, END, and LEN, see `org-roam-fztl-overlay--region'."
-  (org-roam-fztl-overlay--region beg end len
+;; (defun org-roam-fztl-overlay--render-links ()
+;;   "Render folgezettel ID overlays for all Org links found."
+;;   (org-element-map (org-element-parse-buffer) 'link
+;;     #'org-roam-fztl-overlay--render-link))
+
+(defun org-roam-fztl-overlay--remove (&optional beg end)
+  "Remove folgezettel overlays in region from BEG to END."
+  (org-roam-fztl--narrow-and-eval beg end
     (remove-overlays beg end 'category 'fztl)))
 
-(defun org-roam-fztl-overlay--refresh (&optional beg end len)
+(defun org-roam-fztl-overlay--render (&optional beg end)
+  "Render folgezettel overlays in region from BEG to END."
+  (org-roam-fztl--narrow-and-eval beg end
+    (org-roam-fztl-overlay--render-in-title)
+    (org-roam-fztl-overlay--render-in-headlines)
+    (org-element-map (org-element-parse-buffer) 'link
+      #'org-roam-fztl-overlay--render-link)))
+
+(defun org-roam-fztl-overlay--refresh (&optional beg end)
   "Refresh folgezettel overlays in region.
 For BEG, END, and LEN, see `org-roam-fztl-overlay--region'."
-  (org-roam-fztl-overlay--remove beg end len)
-  (org-roam-fztl-overlay--render-in-title beg end len)
-  (org-roam-fztl-overlay--render-in-headlines beg end len)
-  (org-roam-fztl-overlay--render-in-links beg end len))
+  (message "Refreshing overlays from %s to %s in %s"
+           beg end (current-buffer))
+  (org-roam-fztl-overlay--remove beg end)
+  (org-roam-fztl-overlay--render beg end))
 
 ;;; Nodes
 
@@ -678,7 +682,7 @@ Returns non-nil if an outline window exists and is deleted."
   (when-let*
       ((raw (org-get-heading t t t t))
        (parsed (org-element-parse-secondary-string raw '(link))))
-    (org-element-map parsed 'link #'identity nil t)))
+    (org-element-map parsed 'link #'identity nil 'first-match)))
 
 (defun org-roam-fztl-outline--headline-linked-node ()
   "Get node linked on headline at point if exists."
@@ -835,11 +839,12 @@ if such a link exists."
        (read-only-mode +1))))
 
 (defun org-roam-fztl-outline-insert-child ()
-  "Insert child of current heading."
+  "Insert child of current headline."
   (interactive)
   (org-roam-fztl-outline--modify
    (end-of-line)
-   (org-meta-return)
+   (let ((org-insert-heading-respect-content t))
+     (org-insert-heading))
    (org-do-demote)
    (org-roam-node-insert)
    (beginning-of-line)))
@@ -864,7 +869,7 @@ if such a link exists."
   "Refresh tags."
   (interactive)
   (org-roam-fztl-outline--modify
-   (call-interactively #'org-roam-fztl-outline-tags-refresh)))
+   (org-roam-fztl-outline-tags-refresh)))
 
 (defvar-keymap org-roam-fztl-outline-mode-map
   :doc "Keymap for `org-roam-fztl-mode' under prefix."
@@ -895,6 +900,8 @@ if such a link exists."
   "W b" #'org-roam-fztl-outline-window-bottom
   "W l" #'org-roam-fztl-outline-window-left)
 
+(set-keymap-parent org-roam-fztl-outline-mode-map text-mode-map)
+
 ;;;###autoload
 (define-derived-mode org-roam-fztl-outline-mode org-mode "fztl"
   "Major mode for folgezettel outline mode."
@@ -907,8 +914,6 @@ if such a link exists."
     (hack-dir-local-variables-non-file-buffer))
 
   (read-only-mode 1)
-
-  ;; (set-keymap-parent org-roam-fztl-outline-mode-map nil)
 
   ;; Disable input method
   (make-local-variable 'current-input-method)
@@ -935,7 +940,7 @@ if such a link exists."
   (org-roam-fztl-outline-window--font-lock-sync (window-start) (window-end)))
 
 (defun org-roam-fztl-outline-mode--on-post-node-insert (id desc)
-  (org-roam-fztl-outline-tags-refresh))
+  (org-roam-fztl-outline-refresh-tags))
 
 (defun org-roam-fztl-outline-mode--on-window-buffer-change (win)
   (let ((beg (window-start win))
@@ -991,28 +996,40 @@ if such a link exists."
 (keymap-set org-roam-fztl-mode-map org-roam-fztl-mode-prefix org-roam-fztl-mode-prefix-map)
 
 (defun org-roam-fztl-mode--on-window-scroll (win beg)
-  (let ((end (window-end win t)))
-    (org-roam-fztl-overlay--refresh beg end (- end beg))))
+  (org-roam-fztl-overlay--refresh beg (window-end win t)))
+
+(defun org-roam-fztl-mode--on-before-change (beg end)
+  (org-roam-fztl-overlay--remove beg end))
+
+(defun org-roam-fztl-mode--on-after-change (beg end len)
+  (org-roam-fztl-overlay--render beg end))
+
+(defun org-roam-fztl-mode--on-after-save ()
+  (org-roam-fztl--mapping-from-outline-node)
+  (when-let* ((win (org-roam-fztl-outline-window--get))
+              (beg (window-start))
+              (end (window-end win t)))
+    (with-selected-window win
+      (message "After save from %s to %s..." beg end)
+      (org-roam-fztl-overlay--refresh beg end)
+      (org-roam-fztl-outline-window--font-lock-sync beg end))))
 
 (defun org-roam-fztl-mode--on ()
   "Activate `org-roam-fztl-mode'."
   (add-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe)
   (when (org-roam-fztl-node-outline-p)
-    (add-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node 98 t)
-    (add-hook 'after-save-hook #'org-roam-fztl-overlay--refresh 99 t))
-  (add-hook 'window-scroll-functions
-            #'org-roam-fztl-mode--on-window-scroll
-            99 t)
-  (add-hook 'after-change-functions #'org-roam-fztl-overlay--refresh 99 t))
+    (add-hook 'after-save-hook #'org-roam-fztl-mode--on-after-save 99 t))
+  (add-hook 'window-scroll-functions #'org-roam-fztl-mode--on-window-scroll 99 t)
+  (add-hook 'before-change-functions #'org-roam-fztl-mode--on-before-change 99 t)
+  (add-hook 'after-change-functions #'org-roam-fztl-mode--on-after-change 99 t))
 
 (defun org-roam-fztl-mode--off ()
   "Deactivate `org-roam-fztl-mode'."
-  (remove-hook 'after-change-functions #'org-roam-fztl-overlay--refresh t)
-  (remove-hook 'window-scroll-functions
-               #'org-roam-fztl-mode--on-window-scroll t)
+  (remove-hook 'after-change-functions #'org-roam-fztl-mode--on-after-change t)
+  (remove-hook 'before-change-functions #'org-roam-fztl-mode--on-before-change t)
+  (remove-hook 'window-scroll-functions #'org-roam-fztl-mode--on-window-scroll t)
   (when (org-roam-fztl-node-outline-p)
-    (remove-hook 'after-save-hook #'org-roam-fztl-overlay--refresh t)
-    (remove-hook 'after-save-hook #'org-roam-fztl--mapping-from-outline-node t))
+    (remove-hook 'after-save-hook #'org-roam-fztl-mode--on-after-save t))
   (remove-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe))
 
 ;;;###autoload
