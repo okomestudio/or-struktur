@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.15.5
+;; Version: 0.15.6
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -381,8 +381,6 @@ IDs are extracted from headline properties."
 (defun org-roam-fztl-overlay--refresh (&optional beg end)
   "Refresh folgezettel overlays in region.
 For BEG, END, and LEN, see `org-roam-fztl-overlay--region'."
-  (message "Refreshing overlays from %s to %s in %s"
-           beg end (current-buffer))
   (org-roam-fztl-overlay--remove beg end)
   (org-roam-fztl-overlay--render beg end))
 
@@ -523,12 +521,13 @@ When not given, SIDE defaults to the first entry in `org-roam-fztl-outline-windo
 
 (defun org-roam-fztl-outline-window--font-lock-sync (beg end)
   "Fontify indirect buffer from BEG to END."
-  (when (and (buffer-base-buffer)
-             (buffer-live-p (buffer-base-buffer)))
-    (with-current-buffer (buffer-base-buffer)
-      (when (text-property-any beg end 'fontified nil (current-buffer))
-        (font-lock-flush beg end)
-        (font-lock-ensure beg end)))))
+  (when (and (> (- end beg) 1)
+             (buffer-base-buffer)
+             (buffer-live-p (buffer-base-buffer))
+             (text-property-any beg end 'fontified nil (current-buffer)))
+    (message "Syncing fontification from %s to %s..." beg end)
+    (font-lock-flush beg end)
+    (font-lock-ensure beg end)))
 
 (defun org-roam-fztl-outline-window--display-buffer (buffer &optional side)
   "Display SIDE window for outline BUFFER.
@@ -930,7 +929,8 @@ if such a link exists."
     (narrow-to-region (point-at-bol) (point-max))))
 
 (defun org-roam-fztl-outline-mode--on-after-change (beg end len)
-  (org-roam-fztl-outline-window--font-lock-sync beg end))
+  (when (> (- end beg) 1)
+    (org-roam-fztl-outline-window--font-lock-sync beg end)))
 
 (defun org-roam-fztl-outline-mode--on-window-scroll (win beg)
   (let ((end (window-end win t)))
@@ -1010,7 +1010,6 @@ if such a link exists."
               (beg (window-start))
               (end (window-end win t)))
     (with-selected-window win
-      (message "After save from %s to %s..." beg end)
       (org-roam-fztl-overlay--refresh beg end)
       (org-roam-fztl-outline-window--font-lock-sync beg end))))
 
