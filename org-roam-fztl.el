@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.15.6
+;; Version: 0.16.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -69,7 +69,6 @@
   (declare (indent 2))
   `(let ((beg (or ,beg (point-min)))
          (end (or ,end (point-max))))
-     (message "Narrow %s from %s to %s" (current-buffer) beg end)
      (when (> (- end beg) 1)
        (save-excursion
          (save-restriction
@@ -134,11 +133,11 @@ If given, fill new digit(s) with INITVAL (defaults to zero)."
 If not given, ID defaults to the ID of current node.
 
 See `org-roam-fztl--mapping-id2fz-get' for EXTRA."
-  (org-roam-fztl--mapping-id2fz-get (or id (org-roam-id-at-point)) extra))
+  (org-roam-fztl--db-id2fz-get (or id (org-roam-id-at-point)) extra))
 
 (defun org-roam-fztl-fz--to-id (fz)
   "Get ID for folgezettel FZ."
-  (org-roam-fztl--mapping-fz2id-get fz))
+  (org-roam-fztl--db-fz2id-get fz))
 
 (defun org-roam-fztl-fz--get-children (fz)
   "Get child folgezettel from FZ."
@@ -146,7 +145,7 @@ See `org-roam-fztl--mapping-id2fz-get' for EXTRA."
     (if fz
         (let* ((fz (copy-sequence fz))
                (fz-child (org-roam-fztl-fz--resize fz (1+ (length fz)) 1)))
-          (while (org-roam-fztl--mapping-fz2id-get fz-child)
+          (while (org-roam-fztl--db-fz2id-get fz-child)
             (push (copy-sequence fz-child) result)
             (org-roam-fztl-fz--lsd-inc fz-child)))
       ;; Top-level folgezettels could be non-contiguous.
@@ -154,7 +153,7 @@ See `org-roam-fztl--mapping-id2fz-get' for EXTRA."
                  (pcase-let ((`(,type ,fz) k))
                    (when (and (eq type 'fz) (= (length fz) 1))
                      (push (copy-sequence fz) result))))
-               org-roam-fztl--mapping))
+               org-roam-fztl--db))
     result))
 
 (defun org-roam-fztl-fz--get-parents (fz)
@@ -173,124 +172,87 @@ See `org-roam-fztl--mapping-id2fz-get' for EXTRA."
 ;; NOTE: The storage uses a hash table as a proof-of-concept implementation. For
 ;; scalability, consider using a relational database, e.g., SQLite.
 
-(defvar org-roam-fztl--mapping (make-hash-table :test #'equal)
-  "Mapping storage.
-Each mapping entry is `(TYPE KEY)' as key and VALUE. This holds mapping both
-from ID to FZ and the reverse, FZ to ID. TYPE is a symbol (either `id' or `fz')
-specifying whether KEY is ID or FZ.")
+(defvar org-roam-fztl--db (make-hash-table :test #'equal)
+  "Mapping storage.")
 
-(defun org-roam-fztl--mapping-empty-p ()
+(defun org-roam-fztl--db-empty-p ()
   "Return non-nil if mapping storage is empty."
-  (= (hash-table-count org-roam-fztl--mapping) 0))
+  (= (hash-table-count org-roam-fztl--db) 0))
 
-(defun org-roam-fztl--mapping-clear ()
+(defun org-roam-fztl--db-clear ()
   "Empty mapping storage."
   (interactive)
-  (clrhash org-roam-fztl--mapping))
+  (clrhash org-roam-fztl--db))
 
-(defun org-roam-fztl--mapping-put (id fz outline-id pos)
-  "Put relation between ID and FZ into mapping storage.
-OUTLINE-ID is the ID of outline node. POS is the outline node position."
-  (let* ((fz (copy-sequence fz))
-         (key `(id ,id))
-         (value (cons outline-id (list (cons fz pos)))))
-    (if-let* ((vs (gethash key org-roam-fztl--mapping)))
-        (let ((fz-pos-items (alist-get outline-id vs nil nil #'equal)))
-          (setf (alist-get fz fz-pos-items nil nil #'equal) pos)
-          (setf (alist-get outline-id vs nil nil #'equal) fz-pos-items)
-          (puthash key vs org-roam-fztl--mapping))
-      (puthash key (list value) org-roam-fztl--mapping))
-    (puthash `(fz ,fz) (cons id outline-id) org-roam-fztl--mapping)))
-
-(defun org-roam-fztl--mapping-remove (id fz)
-  "Remove relation between ID and FZ from mapping storage."
-  (when-let* ((vs (gethash `(id ,id) org-roam-fztl--mapping)))
-    (pcase-dolist (`(,outline-id . ,fz-pos-items) vs)
-      (let ((fz-pos-items-size (length fz-pos-items)))
-        (pcase-dolist (`(,-fz . ,pos) fz-pos-items)
-          (when (equal fz -fz)
-            (setq fz-pos-items (assoc-delete-all fz fz-pos-items #'equal))))
-        (if (= (length fz-pos-items) 0)
-            (setq vs (assoc-delete-all outline-id vs #'equal))
-          (if (/= (length fz-pos-items) fz-pos-items-size)
-              (setf (alist-get outline-id vs nil nil #'equal) fz-pos-items)))))
-    (if (= (length vs) 0)
-        (remhash `(id ,id) org-roam-fztl--mapping)
-      (puthash `(id ,id) vs org-roam-fztl--mapping)))
-  (remhash `(fz ,fz) org-roam-fztl--mapping))
-
-(defun org-roam-fztl--mapping-fz2id-get (fz)
+(defun org-roam-fztl--db-fz2id-get (fz)
   "Get ID for FZ from mapping storage."
-  (when-let* ((v (gethash `(fz ,fz) org-roam-fztl--mapping)))
+  (when-let* ((v (gethash `(fz ,fz) org-roam-fztl--db)))
     (car v)))
 
-(defun org-roam-fztl--mapping-id2fz-get (id &optional extra)
+(defun org-roam-fztl--db-id2fz-get (id &optional extra)
   "Get all folgezettels associated with ID from mapping storage.
 When EXTRA is non-nil, return also outline ID and position in it."
-  (when-let* ((vs (gethash `(id ,id) org-roam-fztl--mapping)))
-    (let (result)
-      (pcase-dolist (`(,outline-id . ,fz-pos-items) vs)
-        (pcase-dolist (`(,fz . ,pos) fz-pos-items)
-          (push (if extra `(,fz ,outline-id ,pos) fz) result)))
-      result)))
+  (apply #'append
+         (seq-keep
+          (lambda (outline-id)
+            (when-let*
+                ((db (gethash `(outline ,outline-id)
+                              org-roam-fztl--db)))
+              (mapcar
+               (lambda (item)
+                 (pcase-let* ((`(,fz . ,line) item))
+                   (if extra `(,fz ,outline-id ,line) fz)))
+               (gethash id db))))
+          (gethash `(id ,id) org-roam-fztl--db))))
 
-(defun org-roam-fztl--mapping-init ()
+(defun org-roam-fztl--db-init ()
   "Fill mapping storage from all outline nodes."
-  (clrhash org-roam-fztl--mapping)
+  (org-roam-fztl--db-clear)
   (dolist (node (org-roam-fztl-node-outline-list))
     (let* ((buffer (find-file-noselect (org-roam-node-file node))))
       (with-current-buffer buffer
-        (org-roam-fztl--mapping-from-outline-node)))))
+        (org-roam-fztl--db-from-outline)))))
 
-(defun org-roam-fztl--mapping-init-maybe ()
+(defun org-roam-fztl--db-init-maybe ()
   "If mapping storage is empty, initialize."
-  (when (org-roam-fztl--mapping-empty-p)
-    (org-roam-fztl--mapping-init)))
+  (when (org-roam-fztl--db-empty-p)
+    (org-roam-fztl--db-init)))
 
 ;;; TODO(2026-02-05): Improve the algorithm by performing update on affected
 ;;; tree.
-(defun org-roam-fztl--mapping-from-outline-node ()
-  "Parse current outline buffer to update mapping storage."
-  (when-let*
-      ((node (org-roam-node-at-point))
-       (outline-id (and (org-roam-fztl-node-outline-p node)
-                        (org-roam-node-id node)))
-       (start (string-to-number
-               (or (cdr (assoc "FZTL_START" (org-roam-node-properties node)))
-                   "0")))
-       (stage (make-hash-table :test #'equal))
-       (fz `(,start)))
-    (message "Parsing outline buffer %s..." (current-buffer))
-    ;; Stage existing ID-folgezettel mapping.
-    (maphash
-     (lambda (k vs)
-       (pcase-let ((`(,type ,id) k))
-         (when-let* ((_ (eq type 'id))
-                     (fz-pos-items (alist-get outline-id vs nil nil #'equal)))
-           (pcase-dolist (`(,fz . ,pos) fz-pos-items)
-             (puthash (cons id fz) pos stage)))))
-     org-roam-fztl--mapping)
-
+(defun org-roam-fztl--db-from-outline ()
+  "TBD."
+  (let* ((node (org-roam-node-at-point))
+         (outline-id (org-roam-node-id node))
+         (start (string-to-number
+                 (or (cdr (assoc "FZTL_START" (org-roam-node-properties node)))
+                     "0")))
+         (fz `(,start))
+         (fdb (make-hash-table :test #'equal)))
     (org-element-map (org-element-parse-buffer) 'headline
       (lambda (elmt)
-        (let ((level (org-element-property :level elmt)))
+        (let ((level (org-element-property :level elmt))
+              (line (line-number-at-pos (org-element-property :begin elmt)))
+              vs)
           (setq fz (org-roam-fztl-fz--resize fz level))
           (org-roam-fztl-fz--lsd-inc fz)
           (when-let*
               ((lnk (org-element-map (org-element-property :title elmt) 'link
                       #'identity nil 'first-match))
                (id (and (equal (org-element-property :type lnk) "id")
-                        (org-element-property :path lnk)))
-               (pos (org-element-property :begin lnk)))
-            (when (gethash (cons id fz) stage)
-              (remhash (cons id fz) stage))
-            (org-roam-fztl--mapping-put id fz outline-id pos)))))
+                        (org-element-property :path lnk))))
+            (setq vs (gethash id fdb))
+            (push (cons (copy-sequence fz) line) vs)
+            (puthash id vs fdb)
 
-    ;; Remove staged entries that no longer exist.
-    (maphash (lambda (key _)
-               (pcase-let* ((`(,id . ,fz) key))
-                 (org-roam-fztl--mapping-remove id fz)))
-             stage)))
+            (let* ((key `(id ,id))
+                   (outline-ids (gethash key org-roam-fztl--db)))
+              (cl-pushnew outline-id outline-ids :test #'equal)
+              (puthash key outline-ids org-roam-fztl--db))
+
+            (puthash `(fz ,(copy-sequence fz)) (cons id outline-id)
+                     org-roam-fztl--db)))))
+    (puthash `(outline ,outline-id) fdb org-roam-fztl--db)))
 
 ;;; Overlay Management
 
@@ -323,7 +285,7 @@ When EXTRA is non-nil, return also outline ID and position in it."
 
 (defun org-roam-fztl-overlay--format (id)
   "Render folgezettel from ID for overlay."
-  (when-let* ((fzs (org-roam-fztl--mapping-id2fz-get id)))
+  (when-let* ((fzs (org-roam-fztl--db-id2fz-get id)))
     (string-join (mapcar (lambda (fz)
                            (format org-roam-fztl-overlay-fz-format
                                    (org-roam-fztl-fz--render fz)))
@@ -643,8 +605,8 @@ the entry in the outline."
                  (org-roam-fztl-node-outline-select))))
     (when target-pos
       (with-selected-window win
-        (goto-char target-pos)
-        (org-reveal)
+        (goto-line target-pos)
+        (org-reveal 'siblings)
         (recenter)))
     (when (and focus win)
       (select-window win 'norecord))))
@@ -837,15 +799,26 @@ if such a link exists."
             (revert-buffer nil t)))
        (read-only-mode +1))))
 
+(defmacro org-roam-fztl-outline--refresh-subtree (&rest body)
+  `(let (reg-beg reg-end)
+     (save-excursion
+       (org-mark-subtree 1)
+       (setq reg-beg (region-beginning) reg-end (region-end))
+       (deactivate-mark))
+     (org-roam-fztl-overlay--refresh reg-beg reg-end)
+     ,@body
+     (org-roam-fztl-overlay--refresh reg-beg reg-end)))
+
 (defun org-roam-fztl-outline-insert-child ()
   "Insert child of current headline."
   (interactive)
   (org-roam-fztl-outline--modify
-   (end-of-line)
    (let ((org-insert-heading-respect-content t))
      (org-insert-heading))
    (org-do-demote)
-   (org-roam-node-insert)
+   (org-roam-fztl--db-from-outline)
+   (org-roam-fztl-outline--refresh-subtree
+    (org-roam-node-insert))
    (beginning-of-line)))
 
 (defun org-roam-fztl-outline-insert-sibling ()
@@ -853,7 +826,9 @@ if such a link exists."
   (interactive)
   (org-roam-fztl-outline--modify
    (org-insert-heading-respect-content)
-   (org-roam-node-insert)
+   (org-roam-fztl--db-from-outline)
+   (org-roam-fztl-outline--refresh-subtree
+    (org-roam-node-insert))
    (beginning-of-line)))
 
 (defun org-roam-fztl-outline-delete-subtree ()
@@ -861,8 +836,11 @@ if such a link exists."
   (interactive)
   (org-roam-fztl-outline--modify
    (beginning-of-line)
-   (org-mark-subtree)
-   (call-interactively #'kill-region)))
+   (org-roam-fztl-outline--refresh-subtree
+    (org-mark-subtree)
+    (kill-region (region-beginning) (region-end))
+    (deactivate-mark))
+   (org-roam-fztl--db-from-outline)))
 
 (defun org-roam-fztl-outline-refresh-tags ()
   "Refresh tags."
@@ -883,6 +861,8 @@ if such a link exists."
   "o" #'org-roam-fztl-outline-node-open
   "v" #'org-roam-fztl-outline-org-return
   "<return>" #'org-roam-fztl-outline-org-return
+  "<backtab>" #'org-shifttab
+  "<tab>" #'org-cycle
 
   "C" #'org-roam-fztl-outline-insert-child
   "S" #'org-roam-fztl-outline-insert-sibling
@@ -1005,7 +985,7 @@ if such a link exists."
   (org-roam-fztl-overlay--render beg end))
 
 (defun org-roam-fztl-mode--on-after-save ()
-  (org-roam-fztl--mapping-from-outline-node)
+  (org-roam-fztl--db-from-outline)
   (when-let* ((win (org-roam-fztl-outline-window--get))
               (beg (window-start))
               (end (window-end win t)))
@@ -1015,7 +995,7 @@ if such a link exists."
 
 (defun org-roam-fztl-mode--on ()
   "Activate `org-roam-fztl-mode'."
-  (add-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe)
+  (add-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--db-init-maybe)
   (when (org-roam-fztl-node-outline-p)
     (add-hook 'after-save-hook #'org-roam-fztl-mode--on-after-save 99 t))
   (add-hook 'window-scroll-functions #'org-roam-fztl-mode--on-window-scroll 99 t)
@@ -1029,7 +1009,7 @@ if such a link exists."
   (remove-hook 'window-scroll-functions #'org-roam-fztl-mode--on-window-scroll t)
   (when (org-roam-fztl-node-outline-p)
     (remove-hook 'after-save-hook #'org-roam-fztl-mode--on-after-save t))
-  (remove-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--mapping-init-maybe))
+  (remove-hook 'org-roam-fztl-mode-hook #'org-roam-fztl--db-init-maybe))
 
 ;;;###autoload
 (define-minor-mode org-roam-fztl-mode
