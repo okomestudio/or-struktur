@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.17.1
+;; Version: 0.17.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -233,7 +233,7 @@ When EXTRA is non-nil, return also outline ID and position in it."
     (org-element-map (org-element-parse-buffer) 'headline
       (lambda (elmt)
         (let ((level (org-element-property :level elmt))
-              (line (line-number-at-pos (org-element-property :begin elmt)))
+              (line (line-number-at-pos (org-element-property :begin elmt) t))
               vs)
           (setq fz (org-roam-fztl-fz--resize fz level))
           (org-roam-fztl-fz--lsd-inc fz)
