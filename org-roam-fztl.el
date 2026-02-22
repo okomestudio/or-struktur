@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.16.1
+;; Version: 0.17.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -64,16 +64,17 @@
            (user-error "%s is disabled in %s" ,command-s ,mode-s)))
        (advice-add ,command :before #',fun))))
 
-(defmacro org-roam-fztl--narrow-and-eval (beg end &rest body)
-  "Narrow to region from BEG to END and evaluate BODY."
-  (declare (indent 2))
-  `(let ((beg (or ,beg (point-min)))
-         (end (or ,end (point-max))))
-     (when (> (- end beg) 1)
-       (save-excursion
-         (save-restriction
-           (narrow-to-region beg end)
-           ,@body)))))
+(defmacro org-roam-fztl--narrow-and-eval (beg end buffer &rest body)
+  "Narrow to region from BEG to END of BUFFER and evaluate BODY."
+  (declare (indent 3))
+  `(with-current-buffer (or buffer (current-buffer))
+     (let ((beg (or ,beg (point-min)))
+           (end (or ,end (point-max))))
+       (when (> (- end beg) 1)
+         (save-excursion
+           (save-restriction
+             (narrow-to-region beg end)
+             ,@body))))))
 
 ;;; Folgezettel Operations
 
@@ -327,24 +328,23 @@ IDs are extracted from headline properties."
 ;;   (org-element-map (org-element-parse-buffer) 'link
 ;;     #'org-roam-fztl-overlay--render-link))
 
-(defun org-roam-fztl-overlay--remove (&optional beg end)
-  "Remove folgezettel overlays in region from BEG to END."
-  (org-roam-fztl--narrow-and-eval beg end
+(defun org-roam-fztl-overlay--remove (&optional beg end buffer)
+  "Remove folgezettel overlays in region from BEG to END of BUFFER."
+  (org-roam-fztl--narrow-and-eval beg end buffer
     (remove-overlays beg end 'category 'fztl)))
 
-(defun org-roam-fztl-overlay--render (&optional beg end)
-  "Render folgezettel overlays in region from BEG to END."
-  (org-roam-fztl--narrow-and-eval beg end
+(defun org-roam-fztl-overlay--render (&optional beg end buffer)
+  "Render folgezettel overlays in region from BEG to END of BUFFER."
+  (org-roam-fztl--narrow-and-eval beg end buffer
     (org-roam-fztl-overlay--render-in-title)
     (org-roam-fztl-overlay--render-in-headlines)
     (org-element-map (org-element-parse-buffer) 'link
       #'org-roam-fztl-overlay--render-link)))
 
-(defun org-roam-fztl-overlay--refresh (&optional beg end)
-  "Refresh folgezettel overlays in region.
-For BEG, END, and LEN, see `org-roam-fztl-overlay--region'."
-  (org-roam-fztl-overlay--remove beg end)
-  (org-roam-fztl-overlay--render beg end))
+(defun org-roam-fztl-overlay--refresh (&optional beg end buffer)
+  "Refresh folgezettel overlays in region from BEG to END of BUFFER."
+  (org-roam-fztl-overlay--remove beg end buffer)
+  (org-roam-fztl-overlay--render beg end buffer))
 
 ;;; Nodes
 
@@ -483,11 +483,11 @@ When not given, SIDE defaults to the first entry in `org-roam-fztl-outline-windo
 
 (defun org-roam-fztl-outline-window--font-lock-sync (beg end)
   "Fontify indirect buffer from BEG to END."
-  (when (and (> (- end beg) 1)
+  (when (and (derived-mode-p 'org-roam-fztl-outline-mode)
+             (> (- end beg) 1)
              (buffer-base-buffer)
              (buffer-live-p (buffer-base-buffer))
              (text-property-any beg end 'fontified nil (current-buffer)))
-    (message "Syncing fontification from %s to %s..." beg end)
     (font-lock-flush beg end)
     (font-lock-ensure beg end)))
 
@@ -782,32 +782,56 @@ if such a link exists."
   (when-let* ((node (org-roam-node-at-point)))
     (org-roam-node-visit node)))
 
+(defun org-roam-fztl-outline--capture-active-p ()
+  "Non-nil if at least one org-capture buffer is live (pre-finalize)."
+  (seq-some (lambda (buf)
+              (with-current-buffer buf
+                (and (derived-mode-p 'org-mode)
+                     (bound-and-true-p org-capture-mode))))
+            (buffer-list)))
+
 (defmacro org-roam-fztl-outline--modify (&rest body)
   "Temporarily toggle `read-only-mode' while running BODY."
-  `(let* ((inhibit-read-only t))
+  `(let* ((buf (current-buffer))
+          (base-buf (buffer-base-buffer))
+          (inhibit-read-only t))
      (read-only-mode -1)
      (unwind-protect
          (condition-case err
-             (progn
-               ,@body
-               (when (buffer-modified-p)
-                 (save-buffer)))
-           (quit              ; catch quit from `completing-read'
-            (revert-buffer nil t))
+             (progn ,@body)
+           (quit              ; quit from `completing-read'
+            (with-current-buffer base-buf
+              (revert-buffer nil t)))
+           (user-error        ; abort capture before creating node
+            (with-current-buffer base-buf
+              (revert-buffer nil t)))
            (error
-            (message "General error: %s" err)
-            (revert-buffer nil t)))
-       (read-only-mode +1))))
+            (with-current-buffer base-buf
+              (revert-buffer nil t))
+            (signal (car err) (cdr err))))
+
+       ;; Do not save buffer if a capture is in session, in which case
+       ;; save-or-revert is handled in the capture's after-finalize hook.
+       (unless (org-roam-fztl-outline--capture-active-p)
+         (with-current-buffer base-buf
+           (when (buffer-modified-p)
+             (save-buffer))))
+
+       (with-current-buffer buf
+         (read-only-mode +1)))))
 
 (defmacro org-roam-fztl-outline--refresh-subtree (&rest body)
-  `(let (reg-beg reg-end)
-     (save-excursion
-       (org-mark-subtree 1)
-       (setq reg-beg (region-beginning) reg-end (region-end))
-       (deactivate-mark))
-     (org-roam-fztl-overlay--refresh reg-beg reg-end)
+  `(let ((buf (current-buffer))
+         reg-beg reg-end)
+     (with-current-buffer buf
+       (save-excursion
+         (org-mark-subtree 1)
+         (setq reg-beg (region-beginning) reg-end (region-end))
+         (deactivate-mark))
+       (org-roam-fztl-overlay--refresh reg-beg reg-end))
      ,@body
-     (org-roam-fztl-overlay--refresh reg-beg reg-end)))
+     (with-current-buffer buf
+       (org-roam-fztl-overlay--refresh reg-beg reg-end))))
 
 (defun org-roam-fztl-outline-insert-child ()
   "Insert child of current headline."
@@ -818,8 +842,8 @@ if such a link exists."
    (org-do-demote)
    (org-roam-fztl--db-from-outline)
    (org-roam-fztl-outline--refresh-subtree
-    (org-roam-node-insert))
-   (beginning-of-line)))
+    (org-roam-node-insert)
+    (org-roam-fztl--db-from-outline))))
 
 (defun org-roam-fztl-outline-insert-sibling ()
   "Insert sibling of current headline."
@@ -828,8 +852,8 @@ if such a link exists."
    (org-insert-heading-respect-content)
    (org-roam-fztl--db-from-outline)
    (org-roam-fztl-outline--refresh-subtree
-    (org-roam-node-insert))
-   (beginning-of-line)))
+    (org-roam-node-insert)
+    (org-roam-fztl--db-from-outline))))
 
 (defun org-roam-fztl-outline-delete-subtree ()
   "Delete subtree of current headline."
@@ -908,6 +932,25 @@ if such a link exists."
   (when (re-search-forward org-outline-regexp-bol nil t)
     (narrow-to-region (point-at-bol) (point-max))))
 
+(defun org-roam-fztl-outline-mode--on-capture-before-finalize ()
+  (when-let*
+      ((buff (and (bound-and-true-p org-capture-plist)
+                  (eq (plist-get org-capture-plist :finalize) 'insert-link)
+                  (plist-get org-capture-plist :original-buffer))))
+    (with-current-buffer buff
+      (when (derived-mode-p 'org-roam-fztl-outline-mode)
+        (read-only-mode -1)))))
+
+(defun org-roam-fztl-outline-mode--on-capture-after-finalize ()
+  (when-let* ((buf (buffer-base-buffer)))
+    (with-current-buffer buf
+      (if org-note-abort
+          (revert-buffer nil t)
+        (when (buffer-modified-p)
+          (save-buffer)))
+      (when (derived-mode-p 'org-roam-fztl-outline-mode)
+        (read-only-mode +1)))))
+
 (defun org-roam-fztl-outline-mode--on-after-change (beg end len)
   (when (> (- end beg) 1)
     (org-roam-fztl-outline-window--font-lock-sync beg end)))
@@ -929,6 +972,10 @@ if such a link exists."
 
 (defun org-roam-fztl-outline-mode--setup-hooks ()
   "Set up hooks for `org-roam-fztl-outline-mode'."
+  (add-hook 'org-capture-before-finalize-hook
+            #'org-roam-fztl-outline-mode--on-capture-before-finalize)
+  (add-hook 'org-capture-after-finalize-hook
+            #'org-roam-fztl-outline-mode--on-capture-after-finalize)
   (add-hook 'after-change-functions
             #'org-roam-fztl-outline-mode--on-after-change
             nil t)
@@ -976,7 +1023,7 @@ if such a link exists."
 (keymap-set org-roam-fztl-mode-map org-roam-fztl-mode-prefix org-roam-fztl-mode-prefix-map)
 
 (defun org-roam-fztl-mode--on-window-scroll (win beg)
-  (org-roam-fztl-overlay--refresh beg (window-end win t)))
+  (org-roam-fztl-overlay--refresh beg (window-end win t) (window-buffer win)))
 
 (defun org-roam-fztl-mode--on-before-change (beg end)
   (org-roam-fztl-overlay--remove beg end))
@@ -987,10 +1034,10 @@ if such a link exists."
 (defun org-roam-fztl-mode--on-after-save ()
   (org-roam-fztl--db-from-outline)
   (when-let* ((win (org-roam-fztl-outline-window--get))
-              (beg (window-start))
+              (beg (window-start win))
               (end (window-end win t)))
     (with-selected-window win
-      (org-roam-fztl-overlay--refresh beg end)
+      (org-roam-fztl-overlay--refresh beg end (window-buffer win))
       (org-roam-fztl-outline-window--font-lock-sync beg end))))
 
 (defun org-roam-fztl-mode--on ()
