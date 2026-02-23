@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.17.2
+;; Version: 0.17.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -638,6 +638,21 @@ Returns non-nil if an outline window exists and is deleted."
   :type '(repeat string)
   :group 'org-roam-fztl)
 
+(defun org-roam-fztl-outline--link ()
+  "Return first Org link element on current line or nil if it does not exist."
+  (save-excursion
+    (beginning-of-line)
+    (let ((end (line-end-position))
+          lnk)
+      (while (and (not lnk)
+                  (< (point) end)
+                  (re-search-forward org-link-any-re end t))
+        (goto-char (match-beginning 0))
+        (when-let ((el (org-element-context)))
+          (when (eq (org-element-type el) 'link)
+            (setq lnk el))))
+      lnk)))
+
 (defun org-roam-fztl-outline--headline-link ()
   "Get link on headline at point if exists."
   (when-let*
@@ -866,6 +881,27 @@ if such a link exists."
     (deactivate-mark))
    (org-roam-fztl--db-from-outline)))
 
+(defun org-roam-fztl-outline-edit-link-desc ()
+  "Edit link description."
+  (interactive)
+  (org-roam-fztl-outline--modify
+   (when-let*
+       ((lnk (org-roam-fztl-outline--link))
+        (type (org-element-property :type lnk))
+        (id (and (equal type "id") (org-element-property :path lnk)))
+        (beg (org-element-property :begin lnk))
+        (end (org-element-property :end lnk))
+        (desc (buffer-substring-no-properties
+               (org-element-property :contents-begin lnk)
+               (org-element-property :contents-end lnk)))
+        (node (org-roam-node-from-id id))
+        (titles (cons (org-roam-node-title node) (org-roam-node-aliases node)))
+        (desc (completing-read "Change description: " titles nil nil desc)))
+     (goto-char beg)
+     (delete-region beg end)
+     (insert (format "[[%s:%s][%s]]" type id desc)))
+   (org-roam-fztl-outline-tags-refresh)))
+
 (defun org-roam-fztl-outline-refresh-tags ()
   "Refresh tags."
   (interactive)
@@ -891,8 +927,8 @@ if such a link exists."
   "C" #'org-roam-fztl-outline-insert-child
   "S" #'org-roam-fztl-outline-insert-sibling
   "D" #'org-roam-fztl-outline-delete-subtree
+  "T" #'org-roam-fztl-outline-edit-link-desc
   "E" #'org-roam-fztl-outline-edit
-  "T" #'org-roam-fztl-outline-refresh-tags
 
   "O" #'org-roam-fztl-outline-switch-node
   "R" #'font-lock-fontify-buffer
