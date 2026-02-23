@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.17.3
+;; Version: 0.17.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -794,8 +794,15 @@ if such a link exists."
 (defun org-roam-fztl-outline-edit ()
   "Edit outline node in base buffer."
   (interactive)
-  (when-let* ((node (org-roam-node-at-point)))
-    (org-roam-node-visit node)))
+  (when-let*
+      ((pos (point))
+       (node (org-roam-node-at-point))
+       (buf (progn (org-roam-node-visit node)
+                   (get-file-buffer (org-roam-node-file node)))))
+    (with-current-buffer buf
+      (goto-char pos)
+      (org-fold-show-context)
+      (recenter))))
 
 (defun org-roam-fztl-outline--capture-active-p ()
   "Non-nil if at least one org-capture buffer is live (pre-finalize)."
