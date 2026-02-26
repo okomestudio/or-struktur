@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/org-roam-fztl
-;; Version: 0.17.4
+;; Version: 0.17.5
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -871,7 +871,10 @@ if such a link exists."
   "Insert sibling of current headline."
   (interactive)
   (org-roam-fztl-outline--modify
-   (org-insert-heading-respect-content)
+   (let ((org-insert-heading-respect-content t))
+     (org-insert-heading))
+   (org-forward-heading-same-level 1)
+   (move-end-of-line 1)
    (org-roam-fztl--db-from-outline)
    (org-roam-fztl-outline--refresh-subtree
     (org-roam-node-insert)
