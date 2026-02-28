@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.18.1
+;; Version: 0.18.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -1092,8 +1092,10 @@ the point will be on the entry in the strukturzettel."
                        outline-node)
                   target-pos pos)))))
     (unless win
-      (setq win (or-struktur-view--display-indirect-buffer
-                 (or-struktur-sz-select))))
+      (if-let* ((node (or-struktur-sz-select)))
+          (setq win (or-struktur-view--display-indirect-buffer
+                     node))
+        (error "No strukturzettels found")))
     (when target-pos
       (with-selected-window win
         (goto-line target-pos)
