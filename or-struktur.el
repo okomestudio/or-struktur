@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.18.2
+;; Version: 0.19.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -48,20 +48,29 @@
   :type 'string
   :group 'or-struktur)
 
-(defcustom or-struktur-overlay-text-placement 'before-string
+(defcustom or-struktur-sid-text-placement 'before-string
   "Specify side of overlay to show rendered SID."
   :type '(choice before-string after-string)
   :group 'or-struktur)
 
-(defcustom or-struktur-overlay-string-format "[%s]"
-  "String wrapper used for SID overlays."
+(defcustom or-struktur-sid-text-wrapper "[%s]"
+  "String wrapper used for text representation of SID.
+When set to nil, text wrapping is disabled for all SIDs, regardless of
+per-strukturzettel settings."
   :type 'string
   :group 'or-struktur)
 
-(defcustom or-struktur-sid-format '("%d" ".%d")
+(defcustom or-struktur-sid-text-format '("%d" ".%d")
   "String format for SID representation.
 Allowed formatters are '%d' (numeric) and '%s' (alphabetic). When extended,
-alphanumeric components are alternated."
+alphanumeric components are alternated.
+
+Examples:
+
+  - (\"%d\" \"%s\") will render like '2d3a1' (numeric then alphabet, with the
+    rest alternating).
+  - (\"%d\" \"-%s\") will render like '2-d3a1' (second digit preceded by a
+    hyphen, with the rest alternating)."
   :type '(list string)
   :group 'or-struktur)
 
@@ -93,6 +102,8 @@ Either nil or `minibuffer' is allowed."
 
 (defface or-struktur-overlay
   `((t :inherit fixed-pitch
+       :height 0.85
+       :underline nil
        :foreground ,(face-attribute 'shadow :foreground)
        :background ,(face-attribute 'shadow :background)))
   "Face used for SID overlays.")
@@ -106,6 +117,10 @@ Either nil or `minibuffer' is allowed."
   "Mapping storage.")
 
 (defvar or-struktur-view--layout-size-default 0.167)
+
+(defvar or-struktur--ov-faces nil)
+
+(defvar or-struktur-sid-text-wrapper--alist nil)
 
 ;;; Utilities
 
@@ -259,16 +274,45 @@ entry."
   (when (or-struktur--db-empty-p)
     (or-struktur--db-init)))
 
+(defun or-struktur--prop-get (props key &optional default)
+  "Get value for KEY in node PROPS.
+If value is nil, returns DEFAULT."
+  (let ((key (concat "STRUKTUR_" key)))
+    (or (cdr (assoc key props)) default)))
+
+(defun or-struktur--conf-from-props (start props)
+  "Configure style for SID starting from START from node properties PROPS."
+  (when-let* ((v (or-struktur--prop-get props "TEXT_WRAPPER")))
+    (setf (alist-get start or-struktur-sid-text-wrapper--alist) v)
+    (setq or-struktur-sid-text-wrapper--alist (sort or-struktur-sid-text-wrapper--alist)))
+  (let (plist box)
+    (when-let* ((v (or-struktur--prop-get props "FACE_FOREGROUND")))
+      (setq plist (append plist `(:foreground ,v))))
+    (when-let* ((v (or-struktur--prop-get props "FACE_BACKGROUND")))
+      (setq plist (append plist `(:background ,v))))
+    (when-let* ((v (or-struktur--prop-get props "FACE_BOX_LINE_WIDTH")))
+      (setq box (append box `(:line-width ,v))))
+    (when-let* ((v (or-struktur--prop-get props "FACE_BOX_COLOR")))
+      (setq box (append box `(:color
+                              ,(pcase v
+                                 ("nil" (face-background 'default nil t))
+                                 (_ v))))))
+    (when box
+      (setq plist (append plist `(:box ,box))))
+    (when plist
+      (setf (alist-get start or-struktur--ov-faces) plist)
+      (setq or-struktur--ov-faces (sort or-struktur--ov-faces)))))
+
 ;; TODO(2026-02-05): Improve by performing update on affected tree.
 (defun or-struktur--db-from-strukturzettel ()
   "Update storage mapping from current strukturzettel."
   (let* ((node (org-roam-node-at-point))
          (sz-id (org-roam-node-id node))
-         (start (string-to-number
-                 (or (cdr (assoc "FZTL_START" (org-roam-node-properties node)))
-                     "0")))
+         (props (org-roam-node-properties node))
+         (start (string-to-number (or-struktur--prop-get props "START" "0")))
          (sid `(,start))
          (fdb (make-hash-table :test #'equal)))
+    (or-struktur--conf-from-props start props)
     (org-element-map (org-element-parse-buffer) 'headline
       (lambda (elmt)
         (let ((level (org-element-property :level elmt))
@@ -296,14 +340,31 @@ entry."
 
 ;;; Overlay Management
 
+(defun or-struktur--binary-search-floor (alist key)
+  "Return ALIST element whose key is floor of KEY."
+  (let* ((left 0)
+         (right (1- (length alist)))
+         result)
+    (while (<= left right)
+      (let* ((mid (+ left (/ (- right left) 2)))
+             (entry (nth mid alist))
+             (val (car entry)))
+        (cond
+         ((= val key) (setq result entry) (setq left (1+ mid)))
+         ((< val key) (setq result entry) (setq left (1+ mid)))
+         (t (setq right (1- mid))))))
+    result))
+
 (defun or-struktur--ov-put (beg end text)
   "Add TEXT overlay for content from BEG to END."
   (let* ((ov (make-overlay beg end))
-         (propertized-text (propertize text 'face 'or-struktur-overlay))
-         (text (pcase or-struktur-overlay-text-placement
-                 ('before-string (concat propertized-text " "))
-                 ('after-string (concat " " propertized-text)))))
-    (overlay-put ov or-struktur-overlay-text-placement text)
+         (space (propertize " "
+                            'face '( :inherit or-struktur-overlay
+                                     :height 0.25 )))
+         (text (pcase or-struktur-sid-text-placement
+                 ('before-string (concat text space))
+                 ('after-string (concat space text)))))
+    (overlay-put ov or-struktur-sid-text-placement text)
     (overlay-put ov 'category 'or-struktur)
     (overlay-put ov 'evaporate t)))
 
@@ -311,11 +372,21 @@ entry."
   "Render SIDs for ID as string for overlay."
   (when-let* ((sids (or-struktur--db-id2sid-get id)))
     (string-join
-     (mapcar (lambda (sid)
-               (format or-struktur-overlay-string-format
-                       (or-struktur-sid--render sid)))
-             sids)
-     "")))
+     (mapcar
+      (lambda (sid)
+        (let ((text-wrapper
+               (if or-struktur-sid-text-wrapper
+                   (or (cdr (or-struktur--binary-search-floor
+                             or-struktur-sid-text-wrapper--alist (car sid)))
+                       or-struktur-sid-text-wrapper)
+                 "%s"))
+              (face (append '(:inherit or-struktur-overlay)
+                            (cdr (or-struktur--binary-search-floor
+                                  or-struktur--ov-faces (car sid))))))
+          (propertize (format text-wrapper (or-struktur-sid--render sid))
+                      'face face)))
+      sids)
+     (string ?\u200B))))
 
 (defun or-struktur--ov-render-in-title ()
   "Render SID overlays in document title.
@@ -387,12 +458,12 @@ The return value is a string or nil if N is not a positive integer."
 
 (defun or-struktur-sid--render (sid)
   "Render SID using preset format.
-The preset format is set with `or-struktur-sid-format'."
+The preset format is set with `or-struktur-sid-text-format'."
   (string-join
    (cl-loop with (converter) = '(nil)
             for i below (length sid)
             collect
-            (let ((fmt (or (nth i or-struktur-sid-format)
+            (let ((fmt (or (nth i or-struktur-sid-text-format)
                            (if (eq converter #'identity) "%s" "%d"))))
               (setq converter (or (and (string-search "%d" fmt) #'identity)
                                   #'or-struktur-sid--number-to-alpha))
