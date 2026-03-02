@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.19.2
+;; Version: 0.19.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -286,9 +286,11 @@ If value is nil, returns DEFAULT."
     (setf (alist-get start or-struktur-sid-text-wrapper--alist) v)
     (setq or-struktur-sid-text-wrapper--alist (sort or-struktur-sid-text-wrapper--alist)))
   (let (plist box)
-    (when-let* ((v (or-struktur--prop-get props "FACE_FOREGROUND")))
+    (when-let* ((v (or-struktur--prop-get props "FACE_FOREGROUND"))
+                (v (if (string= v "nil") nil v)))
       (setq plist (append plist `(:foreground ,v))))
-    (when-let* ((v (or-struktur--prop-get props "FACE_BACKGROUND")))
+    (when-let* ((v (or-struktur--prop-get props "FACE_BACKGROUND"))
+                (v (if (string= v "nil") nil v)))
       (setq plist (append plist `(:background ,v))))
     (when-let* ((v (or-struktur--prop-get props "FACE_BOX_LINE_WIDTH")))
       (setq box (append box `(:line-width ,v))))
