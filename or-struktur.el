@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.19.3
+;; Version: 0.19.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -96,7 +96,7 @@ Either nil or `minibuffer' is allowed."
   :group 'or-struktur)
 
 (defcustom or-struktur-view-show-title-delay 0.2
-  "Delay before showing title in outline."
+  "Delay before showing title in view mode."
   :type 'number
   :group 'or-struktur)
 
@@ -223,8 +223,9 @@ Either nil or `minibuffer' is allowed."
               (beg (window-start win))
               (end (window-end win t)))
     (with-selected-window win
-      (or-struktur--ov-refresh beg end (window-buffer win))
-      (or-struktur-view--font-lock-sync beg end))))
+      (let ((buf (window-buffer win)))
+        (or-struktur--ov-refresh beg end buf)
+        (or-struktur-view--font-lock-sync beg end buf)))))
 
 ;;; Mapping Storage for ID-SID Relations
 
@@ -674,13 +675,14 @@ The function FILTER-FN takes an SID and returns related nodes."
   (make-local-variable 'default-input-method)
   (setq default-input-method nil)
   (or-struktur--disable-command 'or-struktur-view-mode
-                                #'toggle-input-method)
+                                #'toggle-input-method))
 
-  ;; Narrow to contents.
-  (widen)
-  (goto-char (point-min))
-  (when (re-search-forward org-outline-regexp-bol nil t)
-    (narrow-to-region (point-at-bol) (point-max))))
+(defun or-struktur-view--on-after-change-major-mode ()
+  (when (derived-mode-p 'or-struktur-view-mode)
+    (unless (buffer-narrowed-p)
+      (goto-char (point-min))
+      (when (re-search-forward org-outline-regexp-bol nil t)
+        (narrow-to-region (point-at-bol) (point-max))))))
 
 (defun or-struktur-view--on-capture-before-finalize ()
   (when-let*
@@ -703,25 +705,29 @@ The function FILTER-FN takes an SID and returns related nodes."
 
 (defun or-struktur-view--on-after-change (beg end len)
   (when (> (- end beg) 1)
-    (or-struktur-view--font-lock-sync beg end)))
-
-(defun or-struktur-view--on-window-scroll (win beg)
-  (let ((end (window-end win t)))
-    (or-struktur-view--font-lock-sync beg end)))
-
-(defun or-struktur-view--on-window-state-change (win)
-  (or-struktur-view--font-lock-sync (window-start) (window-end)))
+    (or-struktur-view--font-lock-sync beg end (current-buffer))))
 
 (defun or-struktur-view--on-post-node-insert (id desc)
   (or-struktur-view-refresh-tags))
 
+(defun or-struktur-view--on-window-scroll (win beg)
+  (let ((end (window-end win t)))
+    (or-struktur-view--font-lock-sync beg end (window-buffer win))))
+
+(defun or-struktur-view--on-window-state-change (win)
+  (let ((beg (window-start win))
+        (end (window-end win t)))
+    (or-struktur-view--font-lock-sync beg end (window-buffer win))))
+
 (defun or-struktur-view--on-window-buffer-change (win)
   (let ((beg (window-start win))
         (end (window-end win t)))
-    (or-struktur-view--font-lock-sync beg end)))
+    (or-struktur-view--font-lock-sync beg end (window-buffer win))))
 
 (defun or-struktur-view--on-setup ()
   "Set up hooks for `or-struktur-view-mode'."
+  (add-hook 'after-change-major-mode-hook
+            #'or-struktur-view--on-after-change-major-mode)
   (add-hook 'org-capture-before-finalize-hook
             #'or-struktur-view--on-capture-before-finalize)
   (add-hook 'org-capture-after-finalize-hook
@@ -743,8 +749,8 @@ The function FILTER-FN takes an SID and returns related nodes."
 
 (add-hook 'or-struktur-view-mode-hook #'or-struktur-view--on-setup)
 
-(defconst or-struktur-view-window--buffer-name " outline buffer"
-  "Name of indirect buffer visiting outline node file.")
+(defconst or-struktur-view-window--buffer-name " strukturzettel buffer"
+  "Name of indirect buffer visiting strukturzettel file.")
 
 (defun or-struktur-view--link ()
   "Return first Org link element on current line or nil if it does not exist."
@@ -778,7 +784,7 @@ The function FILTER-FN takes an SID and returns related nodes."
     node))
 
 (defun or-struktur-view-tags-refresh ()
-  "Refresh tags in headline at point in outline node.
+  "Refresh tags in headline at point in view mode.
 Use `or-struktur-view-tags-exclude' to exclude tags from being added."
   (interactive)
   (when (not (org-at-heading-p))
@@ -795,7 +801,7 @@ Use `or-struktur-view-tags-exclude' to exclude tags from being added."
     (org-set-tags tags)))
 
 (defun or-struktur-view-tags-refresh-all ()
-  "Refresh tags in all headlines in outline node.
+  "Refresh tags in all headlines in view mode.
 On each headline, refresh is performed by `or-struktur-view-tags-refresh'."
   (interactive)
   (save-excursion
@@ -812,7 +818,7 @@ On each headline, refresh is performed by `or-struktur-view-tags-refresh'."
                           (inhibit-same-window . t)))))))
 
 (defun or-struktur-view-preview-toggle ()
-  "Toggle outline preview."
+  "Toggle preview in view."
   (interactive)
   (when (or-struktur-sz-p)
     (if (member #'or-struktur-view-preview-async post-command-hook)
@@ -830,12 +836,12 @@ On each headline, refresh is performed by `or-struktur-view-tags-refresh'."
       (when (eq or-struktur-view-show-title 'minibuffer)
         (minibuffer-message "Note: %s" desc)))))
 
-;; When outline buffer is modified, indicate with fringe color.
+;; When strukturzettel buffer is modified, indicate with fringe color.
 
 (defvar-local or-struktur-view-modified--cookie nil)
 
 (defun or-struktur-view-modified--change-fringe ()
-  "Indicate when outline buffer is modified.
+  "Indicate when strukturzettel buffer is modified.
 Add this to `post-command-hook'."
   (if (buffer-modified-p)
       (setq-local or-struktur-view-modified--cookie
@@ -872,7 +878,7 @@ if such a link exists."
                       (window . ,win)))))
 
 (defun or-struktur-view-switch-node ()
-  "Switch to different outline node."
+  "Switch to different strukturzettel node."
   (interactive)
   (when-let* ((node (or-struktur-sz-select))
               (win (or-struktur-view--get-window))
@@ -883,7 +889,7 @@ if such a link exists."
     (select-window win 'norecord)))
 
 (defun or-struktur-view-edit ()
-  "Edit outline node in base buffer."
+  "Edit strukturzettel node as regular Org buffer."
   (interactive)
   (when-let*
       ((pos (point))
@@ -1085,13 +1091,13 @@ When not given, SIDE defaults to the first entry in `or-struktur-view-layout'."
                   (derived-mode-p 'or-struktur-view-mode))))
             (window-list)))
 
-(defun or-struktur-view--font-lock-sync (beg end)
-  "Fontify currently selected indirect buffer from BEG to END."
+(defun or-struktur-view--font-lock-sync (beg end buffer)
+  "Fontify currently selected indirect BUFFER from BEG to END."
   (when (and (derived-mode-p 'or-struktur-view-mode)
              (> (- end beg) 1)
              (buffer-base-buffer)
              (buffer-live-p (buffer-base-buffer))
-             (text-property-any beg end 'fontified nil (current-buffer)))
+             (text-property-any beg end 'fontified nil buffer))
     (font-lock-flush beg end)
     (font-lock-ensure beg end)))
 
@@ -1144,9 +1150,9 @@ the point will be on the entry in the strukturzettel."
       (let ((item (seq-find
                    (lambda (item)
                      (pcase-let*
-                         ((`(,fz ,outline-id ,pos) item)
-                          (outline-node (org-roam-node-from-id outline-id))
-                          (file (org-roam-node-file outline-node)))
+                         ((`(,fz ,sz-id ,pos) item)
+                          (sz-node (org-roam-node-from-id sz-id))
+                          (file (org-roam-node-file sz-node)))
                        (when (and win
                                   (eq (buffer-base-buffer (window-buffer win))
                                       (find-buffer-visiting file)))
@@ -1155,12 +1161,12 @@ the point will be on the entry in the strukturzettel."
                    items)))
         (unless item
           ;; No window displaying matching indirect buffer exists.
-          (pcase-let* ((`(,fz ,outline-id ,pos) (car items))
-                       (outline-node (org-roam-node-from-id outline-id)))
+          (pcase-let* ((`(,fz ,sz-id ,pos) (car items))
+                       (sz-node (org-roam-node-from-id sz-id)))
             (when win
               (delete-window win))
             (setq win (or-struktur-view--display-indirect-buffer
-                       outline-node)
+                       sz-node)
                   target-pos pos)))))
     (unless win
       (if-let* ((node (or-struktur-sz-select)))
