@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.19.6
+;; Version: 0.19.7
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -126,6 +126,11 @@ Either nil or `minibuffer' is allowed."
 (defvar or-struktur-sid-text-wrapper--alist nil)
 
 ;;; Utilities
+
+(defun or-struktur--message (&rest _rest)
+  "Display via `message', but a little more quietly."
+  (let ((inhibit-message t))
+    (apply #'message _rest)))
 
 (defmacro or-struktur--debounce (delay &rest body)
   "Run BODY after DELAY seconds of idle time, debouncing repeated invocations."
@@ -269,9 +274,13 @@ entry."
   "Fill mapping storage from all known strukturzettels."
   (or-struktur--db-clear)
   (dolist (node (or-struktur-sz-list))
-    (let* ((buffer (find-file-noselect (org-roam-node-file node))))
-      (with-current-buffer buffer
-        (or-struktur--db-from-strukturzettel)))))
+    (let* ((file (org-roam-node-file node))
+           (buf-open (get-file-buffer file))
+           (buf (or buf-open (find-file-noselect file))))
+      (with-current-buffer buf
+        (or-struktur--db-from-strukturzettel)
+        (unless buf-open
+          (kill-this-buffer))))))
 
 (defun or-struktur--db-init-maybe ()
   "If mapping storage is empty, initialize."
@@ -1095,13 +1104,17 @@ When not given, SIDE defaults to the first entry in `or-struktur-view-layout'."
 
 (defun or-struktur-view--font-lock-sync (beg end buffer)
   "Fontify currently selected indirect BUFFER from BEG to END."
-  (when (and (derived-mode-p 'or-struktur-view-mode)
-             (> (- end beg) 1)
-             (buffer-base-buffer)
-             (buffer-live-p (buffer-base-buffer))
-             (text-property-any beg end 'fontified nil buffer))
-    (font-lock-flush beg end)
-    (font-lock-ensure beg end)))
+  (with-current-buffer buffer
+    (or-struktur--message "FL '%s' %s %s %s"
+                          buffer beg end
+                          (text-property-any beg end 'fontified nil buffer))
+    (when (and (derived-mode-p 'or-struktur-view-mode)
+               (> (- end beg) 1)
+               (buffer-base-buffer buffer)
+               (buffer-live-p (buffer-base-buffer buffer))
+               (text-property-any beg end 'fontified nil buffer))
+      (font-lock-flush beg end)
+      (font-lock-ensure beg end))))
 
 (defun or-struktur-view--display-buffer (buffer &optional side)
   "Display strukturzettel indirect BUFFER in SIDE window.
