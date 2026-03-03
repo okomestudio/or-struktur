@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.19.4
+;; Version: 0.19.5
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -281,41 +281,43 @@ If value is nil, returns DEFAULT."
   (let ((key (concat "STRUKTUR_" key)))
     (or (cdr (assoc key props)) default)))
 
-(defun or-struktur--conf-from-props (start props)
-  "Configure style for SID starting from START from node properties PROPS."
-  (when-let* ((v (or-struktur--prop-get props "TEXT_WRAPPER")))
-    (setf (alist-get start or-struktur-sid-text-wrapper--alist) v)
-    (setq or-struktur-sid-text-wrapper--alist (sort or-struktur-sid-text-wrapper--alist)))
-  (let (plist box)
-    (when-let* ((v (or-struktur--prop-get props "FACE_FOREGROUND"))
-                (v (if (string= v "nil") nil v)))
-      (setq plist (append plist `(:foreground ,v))))
-    (when-let* ((v (or-struktur--prop-get props "FACE_BACKGROUND"))
-                (v (if (string= v "nil") nil v)))
-      (setq plist (append plist `(:background ,v))))
-    (when-let* ((v (or-struktur--prop-get props "FACE_BOX_LINE_WIDTH")))
-      (setq box (append box `(:line-width ,v))))
-    (when-let* ((v (or-struktur--prop-get props "FACE_BOX_COLOR")))
-      (setq box (append box `(:color
-                              ,(pcase v
-                                 ("nil" (face-background 'default nil t))
-                                 (_ v))))))
-    (when box
-      (setq plist (append plist `(:box ,box))))
-    (when plist
-      (setf (alist-get start or-struktur--ov-faces) plist)
-      (setq or-struktur--ov-faces (sort or-struktur--ov-faces)))))
+(defun or-struktur--conf-from-props (props)
+  "Read configurations from node properties PROPS."
+  (let ((start (string-to-number (or-struktur--prop-get props "START" "1"))))
+    (unless (and (integerp start) (> start 0))
+      (error "STRUKTUR_START must be a positive integer"))
+    (when-let* ((v (or-struktur--prop-get props "TEXT_WRAPPER")))
+      (setf (alist-get start or-struktur-sid-text-wrapper--alist) v)
+      (setq or-struktur-sid-text-wrapper--alist (sort or-struktur-sid-text-wrapper--alist)))
+    (let (plist box)
+      (when-let* ((v (or-struktur--prop-get props "FACE_FOREGROUND"))
+                  (v (if (string= v "nil") nil v)))
+        (setq plist (append plist `(:foreground ,v))))
+      (when-let* ((v (or-struktur--prop-get props "FACE_BACKGROUND"))
+                  (v (if (string= v "nil") nil v)))
+        (setq plist (append plist `(:background ,v))))
+      (when-let* ((v (or-struktur--prop-get props "FACE_BOX_LINE_WIDTH")))
+        (setq box (append box `(:line-width ,v))))
+      (when-let* ((v (or-struktur--prop-get props "FACE_BOX_COLOR")))
+        (setq box (append box `(:color
+                                ,(pcase v
+                                   ("nil" (face-background 'default nil t))
+                                   (_ v))))))
+      (when box
+        (setq plist (append plist `(:box ,box))))
+      (when plist
+        (setf (alist-get start or-struktur--ov-faces) plist)
+        (setq or-struktur--ov-faces (sort or-struktur--ov-faces))))
+    start))
 
 ;; TODO(2026-02-05): Improve by performing update on affected tree.
 (defun or-struktur--db-from-strukturzettel ()
   "Update storage mapping from current strukturzettel."
   (let* ((node (org-roam-node-at-point))
          (sz-id (org-roam-node-id node))
-         (props (org-roam-node-properties node))
-         (start (string-to-number (or-struktur--prop-get props "START" "0")))
+         (start (or-struktur--conf-from-props (org-roam-node-properties node)))
          (sid `(,start))
          (fdb (make-hash-table :test #'equal)))
-    (or-struktur--conf-from-props start props)
     (org-element-map (org-element-parse-buffer) 'headline
       (lambda (elmt)
         (let ((level (org-element-property :level elmt))
@@ -1102,7 +1104,7 @@ When not given, SIDE defaults to the first entry in `or-struktur-view-layout'."
     (font-lock-ensure beg end)))
 
 (defun or-struktur-view--display-buffer (buffer &optional side)
-  "Display strukturzettel BUFFER in SIDE window.
+  "Display strukturzettel indirect BUFFER in SIDE window.
 This function returns the newly created side window."
   (pcase-let*
       ((`(,side . ,size)
@@ -1139,45 +1141,56 @@ This function returns the newly created side window."
 
 (defun or-struktur-view--show (&optional focus)
   "Show strukturzettel window.
-If FOCUS is non-nil and the current node is associated with a strukturzettel,
-the point will be on the entry in the strukturzettel."
+If the current node is associated with a strukturzettel, the point will be on
+the entry in that strukturzettel if displayed in the view window.
+
+If FOCUS is non-nil, select the view window."
   (let ((win (or-struktur-view--get-window))
         target-pos)
+    ;; Look for target strukturzettel buffer and its position for the node at
+    ;; point.
     (when-let*
         ((node (and (derived-mode-p 'org-mode) (org-roam-node-at-point)))
          (id (and node (org-roam-node-id node)))
          (items (and id (or-struktur-sid--from-id id 'extra))))
-      (let ((item (seq-find
-                   (lambda (item)
-                     (pcase-let*
-                         ((`(,fz ,sz-id ,pos) item)
-                          (sz-node (org-roam-node-from-id sz-id))
-                          (file (org-roam-node-file sz-node)))
-                       (when (and win
-                                  (eq (buffer-base-buffer (window-buffer win))
-                                      (find-buffer-visiting file)))
-                         (setq target-pos pos)
-                         t)))
-                   items)))
-        (unless item
-          ;; No window displaying matching indirect buffer exists.
-          (pcase-let* ((`(,fz ,sz-id ,pos) (car items))
-                       (sz-node (org-roam-node-from-id sz-id)))
-            (when win
-              (delete-window win))
-            (setq win (or-struktur-view--display-indirect-buffer
-                       sz-node)
-                  target-pos pos)))))
+      (unless
+          (seq-find
+           (lambda (item)
+             (pcase-let*
+                 ((`(,fz ,sz-id ,pos) item)
+                  (sz-node (org-roam-node-from-id sz-id))
+                  (file (org-roam-node-file sz-node)))
+               (when (and win
+                          (eq (buffer-base-buffer (window-buffer win))
+                              (find-buffer-visiting file)))
+                 ;; The target buffer is already displayed in side window, so
+                 ;; just get the target position in it.
+                 (setq target-pos pos)
+                 t)))
+           items)
+        ;; The target buffer is yet to be displayed, so pick one, display in
+        ;; side window and record the target position in the buffer.
+        (pcase-let* ((`(,fz ,sz-id ,pos) (car items))
+                     (sz-node (org-roam-node-from-id sz-id)))
+          (when win
+            (delete-window win))
+          (setq win (or-struktur-view--display-indirect-buffer
+                     sz-node)
+                target-pos pos))))
+
+    ;; If window is yet to be displayed at this point, let the user pick a
+    ;; strukturzettel buffer.
     (unless win
       (if-let* ((node (or-struktur-sz-select)))
-          (setq win (or-struktur-view--display-indirect-buffer
-                     node))
+          (setq win (or-struktur-view--display-indirect-buffer node))
         (error "No strukturzettels found")))
+
     (when target-pos
       (with-selected-window win
         (goto-line target-pos)
         (org-reveal 'siblings)
         (recenter)))
+
     (when (and focus win)
       (select-window win 'norecord))))
 
