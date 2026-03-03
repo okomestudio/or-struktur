@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.19.5
+;; Version: 0.19.6
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -112,6 +112,9 @@ Either nil or `minibuffer' is allowed."
   '((((background dark))  :inherit region)
     (((background light)) :inherit region))
   "Fringe face for modified strukturzettel buffer.")
+
+(defconst or-struktur-view--buffer-name " strukturzettel buffer"
+  "Name of indirect buffer visiting strukturzettel file.")
 
 (defvar or-struktur--db (make-hash-table :test #'equal)
   "Mapping storage.")
@@ -751,9 +754,6 @@ The function FILTER-FN takes an SID and returns related nodes."
 
 (add-hook 'or-struktur-view-mode-hook #'or-struktur-view--on-setup)
 
-(defconst or-struktur-view-window--buffer-name " strukturzettel buffer"
-  "Name of indirect buffer visiting strukturzettel file.")
-
 (defun or-struktur-view--link ()
   "Return first Org link element on current line or nil if it does not exist."
   (save-excursion
@@ -1131,7 +1131,7 @@ This function returns the newly created side window."
 (defun or-struktur-view--display-indirect-buffer (node)
   "Display indirect buffer of NODE."
   (let* ((name (format "%s<%s>"
-                       or-struktur-view-window--buffer-name
+                       or-struktur-view--buffer-name
                        (org-roam-node-id node)))
          (buf (or (get-buffer name)
                   (make-indirect-buffer
