@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.19.7
+;; Version: 0.19.8
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -327,7 +327,8 @@ If value is nil, returns DEFAULT."
   "Update storage mapping from current strukturzettel."
   (let* ((node (org-roam-node-at-point))
          (sz-id (org-roam-node-id node))
-         (start (or-struktur--conf-from-props (org-roam-node-properties node)))
+         (start (1- (or-struktur--conf-from-props
+                     (org-roam-node-properties node))))
          (sid `(,start))
          (fdb (make-hash-table :test #'equal)))
     (org-element-map (org-element-parse-buffer) 'headline
@@ -721,6 +722,11 @@ The function FILTER-FN takes an SID and returns related nodes."
   (when (> (- end beg) 1)
     (or-struktur-view--font-lock-sync beg end (current-buffer))))
 
+(defun or-struktur-view--on-org-cycle (state)
+  (let ((beg (window-start))
+        (end (window-end nil t)))
+    (or-struktur-view--font-lock-sync beg end (current-buffer))))
+
 (defun or-struktur-view--on-post-node-insert (id desc)
   (or-struktur-view-refresh-tags))
 
@@ -754,6 +760,8 @@ The function FILTER-FN takes an SID and returns related nodes."
             #'or-struktur-view--on-window-state-change nil t)
   (add-hook 'post-command-hook
             #'or-struktur-view-modified--change-fringe nil t)
+  (add-hook 'org-cycle-hook
+            #'or-struktur-view--on-org-cycle nil t)
   (add-hook 'org-roam-post-node-insert-hook
             #'or-struktur-view--on-post-node-insert 99 t)
   (add-hook 'post-command-hook
@@ -973,7 +981,8 @@ if such a link exists."
    (or-struktur--db-from-strukturzettel)
    (or-struktur-view--refresh-subtree
     (org-roam-node-insert)
-    (or-struktur--db-from-strukturzettel))))
+    (or-struktur--db-from-strukturzettel))
+   (move-beginning-of-line 1)))
 
 (defun or-struktur-view-insert-sibling ()
   "Insert sibling of current headline."
@@ -984,7 +993,8 @@ if such a link exists."
    (or-struktur--db-from-strukturzettel)
    (or-struktur-view--refresh-subtree
     (org-roam-node-insert)
-    (or-struktur--db-from-strukturzettel))))
+    (or-struktur--db-from-strukturzettel))
+   (move-beginning-of-line 1)))
 
 (defun or-struktur-view-delete-subtree ()
   "Delete subtree of current headline."
