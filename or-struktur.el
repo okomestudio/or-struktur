@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.19.8
+;; Version: 0.19.9
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -1162,55 +1162,62 @@ This function returns the newly created side window."
                    name))))
     (or-struktur-view--display-buffer buf)))
 
+(defun or-struktur-view--shown-p (id)
+  "Return the view window if node with ID is already shown."
+  (when-let* ((win (or-struktur-view--get-window)))
+    (and (eq (buffer-base-buffer (window-buffer win))
+             (find-buffer-visiting
+              (org-roam-node-file
+               (org-roam-node-from-id id))))
+         win)))
+
 (defun or-struktur-view--show (&optional focus)
   "Show strukturzettel window.
 If the current node is associated with a strukturzettel, the point will be on
-the entry in that strukturzettel if displayed in the view window.
+the entry line in that strukturzettel if displayed in the view window.
 
 If FOCUS is non-nil, select the view window."
   (let ((win (or-struktur-view--get-window))
-        target-pos)
-    ;; Look for target strukturzettel buffer and its position for the node at
+        sz-node sz-line)
+    ;; Look for target strukturzettel buffer and its line number for the node at
     ;; point.
-    (when-let*
-        ((node (and (derived-mode-p 'org-mode) (org-roam-node-at-point)))
-         (id (and node (org-roam-node-id node)))
-         (items (and id (or-struktur-sid--from-id id 'extra))))
-      (unless
-          (seq-find
-           (lambda (item)
-             (pcase-let*
-                 ((`(,fz ,sz-id ,pos) item)
-                  (sz-node (org-roam-node-from-id sz-id))
-                  (file (org-roam-node-file sz-node)))
-               (when (and win
-                          (eq (buffer-base-buffer (window-buffer win))
-                              (find-buffer-visiting file)))
-                 ;; The target buffer is already displayed in side window, so
-                 ;; just get the target position in it.
-                 (setq target-pos pos)
-                 t)))
-           items)
-        ;; The target buffer is yet to be displayed, so pick one, display in
-        ;; side window and record the target position in the buffer.
-        (pcase-let* ((`(,fz ,sz-id ,pos) (car items))
-                     (sz-node (org-roam-node-from-id sz-id)))
-          (when win
-            (delete-window win))
-          (setq win (or-struktur-view--display-indirect-buffer
-                     sz-node)
-                target-pos pos))))
+    (when-let* ((node (and (derived-mode-p 'org-mode)
+                           (org-roam-node-at-point))))
+      (if (or-struktur-sz-p node)
+          (setq sz-node node
+                sz-line (line-number-at-pos (point) t) )
+        (when-let*
+            ((node (and (derived-mode-p 'org-mode) (org-roam-node-at-point)))
+             (id (and node (org-roam-node-id node)))
+             (items (and id (or-struktur-sid--from-id id 'extra))))
+          (unless
+              (seq-find
+               (lambda (item)
+                 (pcase-let* ((`(,fz ,sz-id ,pos) item))
+                   (when (and win (or-struktur-view--shown-p sz-id))
+                     ;; The target buffer is already displayed in side window,
+                     ;; so just get the target line in it.
+                     (setq sz-node (org-roam-node-from-id sz-id)
+                           sz-line pos)
+                     t)))
+               items)
+            ;; The target buffer is yet to be displayed, so pick one, display in
+            ;; side window and record the target line in the buffer.
+            (pcase-let* ((`(,fz ,sz-id ,pos) (car items)))
+              (setq sz-node (org-roam-node-from-id sz-id)
+                    sz-line pos))))))
+    ;; If no strukturzettel identified, let the user select one.
+    (unless sz-node
+      (setq sz-node (or-struktur-sz-select)))
 
-    ;; If window is yet to be displayed at this point, let the user pick a
-    ;; strukturzettel buffer.
-    (unless win
-      (if-let* ((node (or-struktur-sz-select)))
-          (setq win (or-struktur-view--display-indirect-buffer node))
-        (error "No strukturzettels found")))
+    (unless (or-struktur-view--shown-p (org-roam-node-id sz-node))
+      (when win
+        (delete-window win))
+      (setq win (or-struktur-view--display-indirect-buffer sz-node)))
 
-    (when target-pos
+    (when sz-line
       (with-selected-window win
-        (goto-line target-pos)
+        (goto-line sz-line)
         (org-reveal 'siblings)
         (recenter)))
 
