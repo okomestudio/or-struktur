@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.21.1
+;; Version: 0.21.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -107,11 +107,6 @@ Either nil or `minibuffer' is allowed."
        :foreground ,(face-attribute 'shadow :foreground)
        :background ,(face-attribute 'shadow :background)))
   "Face used for SID overlays.")
-
-(defface or-struktur-view-modified
-  '((((background dark))  :inherit region)
-    (((background light)) :inherit region))
-  "Fringe face for modified strukturzettel buffer.")
 
 (defconst or-struktur-view--buffer-name " strukturzettel buffer"
   "Name of indirect buffer visiting strukturzettel file.")
@@ -763,8 +758,6 @@ The function FILTER-FN takes an SID and returns related nodes."
             #'or-struktur-view--on-window-scroll nil t)
   (add-hook 'window-state-change-functions
             #'or-struktur-view--on-window-state-change nil t)
-  (add-hook 'post-command-hook
-            #'or-struktur-view-modified--change-fringe nil t)
   (add-hook 'org-cycle-hook
             #'or-struktur-view--on-org-cycle nil t)
   (add-hook 'org-roam-post-node-insert-hook
@@ -859,22 +852,6 @@ On each headline, refresh is performed by `or-struktur-view-tags-refresh'."
                 (desc (org-element-interpret-data contents)))
       (when (eq or-struktur-view-show-title 'minibuffer)
         (minibuffer-message "Note: %s" desc)))))
-
-;; When strukturzettel buffer is modified, indicate with fringe color.
-
-(defvar-local or-struktur-view-modified--cookie nil)
-
-(defun or-struktur-view-modified--change-fringe ()
-  "Indicate when strukturzettel buffer is modified.
-Add this to `post-command-hook'."
-  (if (buffer-modified-p)
-      (setq-local or-struktur-view-modified--cookie
-                  (face-remap-add-relative
-                   'fringe 'or-struktur-view-modified))
-    (when or-struktur-view-modified--cookie
-      (face-remap-remove-relative or-struktur-view-modified--cookie)
-      (set-window-fringes (selected-window) nil nil t)
-      (setq-local or-struktur-view-modified--cookie nil))))
 
 (defun or-struktur-view-next-headline ()
   (interactive)
