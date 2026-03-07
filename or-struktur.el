@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.21.3
+;; Version: 0.22.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -74,13 +74,19 @@ Examples:
   :type '(list string)
   :group 'or-struktur)
 
-(defcustom or-struktur-view-layout '(top . 0.167)
-  "Side window layout options."
-  :type '(alist :key-type (choice (const :tag "Top" top)
-                                  (const :tag "Right" right)
-                                  (const :tag "Left" left)
-                                  (const :tag "Bottom" bottom))
-                :value-type number)
+(defcustom or-struktur-view-layout 'top
+  "Initial side window layout."
+  :type '(choice (const :tag "Top" top)
+                 (const :tag "Right" right)
+                 (const :tag "Left" left)
+                 (const :tag "Bottom" bottom))
+  :group 'or-struktur)
+
+(defcustom or-struktur-view-layout-sizes '((0.167 0.33 0.5) . (0.2 0.4 0.6))
+  "Preset sizes for left/right and top/bottom layout.
+Use `or-struktur-view--window-expand' to cycle through these options."
+  :type '(cons (repeat (choice number))
+               (repeat (choice number)))
   :group 'or-struktur)
 
 (defcustom or-struktur-view-tags-exclude nil
@@ -114,18 +120,11 @@ Either nil or `minibuffer' is allowed."
 (defvar or-struktur--db (make-hash-table :test #'equal)
   "Mapping storage.")
 
-(defvar or-struktur-view--layout-size-default 0.167)
-
 (defvar or-struktur--ov-faces nil)
 
 (defvar or-struktur-sid-text-wrapper--alist nil)
 
 ;;; Utilities
-
-(defun or-struktur--message (&rest _rest)
-  "Display via `message', but a little more quietly."
-  (let ((inhibit-message t))
-    (apply #'message _rest)))
 
 (defmacro or-struktur--debounce (delay &rest body)
   "Run BODY after DELAY seconds of idle time, debouncing repeated invocations."
@@ -163,6 +162,40 @@ Either nil or `minibuffer' is allowed."
            (save-restriction
              (narrow-to-region beg end)
              ,@body))))))
+
+(defun or-struktur--message (&rest _rest)
+  "Display via `message', but a little more quietly."
+  (let ((inhibit-message t))
+    (apply #'message _rest)))
+
+(defun or-struktur--alist-binary-search-floor (alist key)
+  "Return ALIST element whose key is floor of KEY."
+  (let* ((left 0)
+         (right (1- (length alist)))
+         result)
+    (while (<= left right)
+      (let* ((mid (+ left (/ (- right left) 2)))
+             (entry (nth mid alist))
+             (val (car entry)))
+        (cond
+         ((= val key) (setq result entry) (setq left (1+ mid)))
+         ((< val key) (setq result entry) (setq left (1+ mid)))
+         (t (setq right (1- mid))))))
+    result))
+
+(defun or-struktur--list-binary-search-ceil (lis key)
+  "Return list, LIS, index of element whose value is ceil of KEY."
+  (let* ((left 0)
+         (right (1- (length lis)))
+         result)
+    (while (<= left right)
+      (let* ((mid (+ left (/ (- right left) 2)))
+             (elmt (nth mid lis)))
+        (cond
+         ((= elmt key) (setq result mid) (setq right (1- mid)))
+         ((> elmt key) (setq result mid) (setq right (1- mid)))
+         (t (setq left (1+ mid))))))
+    result))
 
 ;;;
 ;;; Minor Mode (or-struktur-mode)
@@ -222,7 +255,7 @@ Either nil or `minibuffer' is allowed."
 
 (defun or-struktur-mode--on-after-save ()
   (or-struktur--db-from-strukturzettel)
-  (when-let* ((win (or-struktur-view--get-window))
+  (when-let* ((win (or-struktur-view--window))
               (beg (window-start win))
               (end (window-end win t)))
     (with-selected-window win
@@ -353,21 +386,6 @@ If value is nil, returns DEFAULT."
 
 ;;; Overlay Management
 
-(defun or-struktur--binary-search-floor (alist key)
-  "Return ALIST element whose key is floor of KEY."
-  (let* ((left 0)
-         (right (1- (length alist)))
-         result)
-    (while (<= left right)
-      (let* ((mid (+ left (/ (- right left) 2)))
-             (entry (nth mid alist))
-             (val (car entry)))
-        (cond
-         ((= val key) (setq result entry) (setq left (1+ mid)))
-         ((< val key) (setq result entry) (setq left (1+ mid)))
-         (t (setq right (1- mid))))))
-    result))
-
 (defun or-struktur--ov-put (beg end text)
   "Add TEXT overlay for content from BEG to END."
   (let* ((ov (make-overlay beg end))
@@ -389,12 +407,12 @@ If value is nil, returns DEFAULT."
       (lambda (sid)
         (let ((text-wrapper
                (if or-struktur-sid-text-wrapper
-                   (or (cdr (or-struktur--binary-search-floor
+                   (or (cdr (or-struktur--alist-binary-search-floor
                              or-struktur-sid-text-wrapper--alist (car sid)))
                        or-struktur-sid-text-wrapper)
                  "%s"))
               (face (append '(:inherit or-struktur-overlay)
-                            (cdr (or-struktur--binary-search-floor
+                            (cdr (or-struktur--alist-binary-search-floor
                                   or-struktur--ov-faces (car sid))))))
           (propertize (format text-wrapper (or-struktur-sid--render sid))
                       'face face)))
@@ -1039,7 +1057,7 @@ if such a link exists."
   "Switch to different strukturzettel node."
   (interactive)
   (when-let* ((node (or-struktur-sz-select))
-              (win (or-struktur-view--get-window))
+              (win (or-struktur-view--window))
               (buf (window-buffer win)))
     (delete-window win)
     (kill-buffer buf)
@@ -1064,71 +1082,51 @@ strukturzettel."
 (defun or-struktur-view-top ()
   "Layout strukturzettel view to top."
   (interactive)
-  (or-struktur-view--layout-side 'top))
+  (or-struktur-view--window-side 'top))
 
 (defun or-struktur-view-right ()
   "Layout strukturzettel view to right."
   (interactive)
-  (or-struktur-view--layout-side 'right))
+  (or-struktur-view--window-side 'right))
 
 (defun or-struktur-view-bottom ()
   "Layout strukturzettel view to bottom."
   (interactive)
-  (or-struktur-view--layout-side 'bottom))
+  (or-struktur-view--window-side 'bottom))
 
 (defun or-struktur-view-left ()
   "Layout strukturzettel view to left."
   (interactive)
-  (or-struktur-view--layout-side 'left))
+  (or-struktur-view--window-side 'left))
 
 (defun or-struktur-view-expand ()
   "Expand side window."
   (interactive)
-  (when-let* ((win (or-struktur-view--get-window))
-              (buf (window-buffer win))
-              (current-size (/ (float (window-total-width win))
-                               (frame-width (window-frame win)))))
-    (pcase-let*
-        ((`(,side . ,size) (or-struktur-view--layout-current))
-         (size (if (< current-size 0.5)
-                   (min 0.5 (+ current-size size))
-                 size)))
-      (or-struktur-view--display-buffer buf side size))))
+  (or-struktur-view--window-expand))
 
-(defun or-struktur-view--layout-current (&optional side)
-  "Set layout to SIDE or get currently active layout when SIDE is not given.
-When not given, SIDE defaults to the first entry in `or-struktur-view-layout'."
-  ;; Ensure list of cons.
-  (setq or-struktur-view-layout
-        (cond ((null or-struktur-view-layout) nil)
-              ((consp (car or-struktur-view-layout))
-               or-struktur-view-layout)
-              ((consp or-struktur-view-layout)
-               (list or-struktur-view-layout))
-              (t nil)))
-  (if side
-      (setq or-struktur-view-layout
-            (if-let* ((v (assq side or-struktur-view-layout)))
-                (cons v (delq v or-struktur-view-layout))
-              (cons (cons side or-struktur-view--layout-size-default)
-                    or-struktur-view-layout))))
-  (car or-struktur-view-layout))
+(defvar or-struktur-view--layout nil
+  "List of layout configuration, i.e., `(SIDE . SIZE)'.
+Top entry is the current or most recently used layout.")
 
-(defun or-struktur-view--layout-side (side)
-  "Layout strukturzettel window to SIDE."
-  (when-let* ((win (or-struktur-view--get-window)))
-    (let ((buf (window-buffer win))
-          (target-pos (and (eq win (selected-window))
-                           (point))))
-      (delete-window win)
-      (setq win (or-struktur-view--display-buffer buf side))
-      (when target-pos
-        (select-window win)
-        (goto-char target-pos)
-        (org-reveal)
-        (recenter)))))
+(defun or-struktur-view--layout (&optional side size)
+  "Get current layout, setting to `(SIDE . SIZE)' if given."
+  (setq side (if (and (null side) (null or-struktur-view--layout))
+                 or-struktur-view-layout side))
+  (when side
+    (unless (member side '(top right bottom left))
+      (error "SIDE must be one of top, right, bottom, left"))
+    (setq or-struktur-view--layout
+          (if-let* ((elmt (assq side or-struktur-view--layout)))
+              (pcase-let* ((`(,_ . ,old-size) elmt))
+                (cons (cons side (or size old-size))
+                      (delq elmt or-struktur-view--layout)))
+            (cons (cons side (funcall (if (member side '(left right))
+                                          #'caar #'cadr)
+                                      or-struktur-view-layout-sizes))
+                  or-struktur-view--layout))))
+  (car or-struktur-view--layout))
 
-(defun or-struktur-view--get-window ()
+(defun or-struktur-view--window ()
   "Return strukturzettel window in use or nil."
   (seq-find (lambda (win)
               (when-let* ((buf (window-buffer win)))
@@ -1136,12 +1134,37 @@ When not given, SIDE defaults to the first entry in `or-struktur-view-layout'."
                   (derived-mode-p 'or-struktur-view-mode))))
             (window-list)))
 
+(defun or-struktur-view--window-side (side)
+  "Layout strukturzettel window to SIDE."
+  (when-let* ((win (or-struktur-view--window))
+              (buf (window-buffer win)))
+    (let ((pos (and (eq win (selected-window)) (point))))
+      (delete-window win)
+      (or-struktur-view--layout side)
+      (setq win (or-struktur-view--display-buffer buf))
+      (when pos
+        (select-window win)
+        (goto-char pos)
+        (org-reveal)
+        (recenter)))))
+
+(defun or-struktur-view--window-expand ()
+  "Expand window size."
+  (when-let* ((win (or-struktur-view--window))
+              (buf (window-buffer win)))
+    (pcase-let*
+        ((`(,side . ,size) (or-struktur-view--layout))
+         (sizes (funcall (if (member side '(left right)) #'car #'cdr)
+                         or-struktur-view-layout-sizes))
+         (index (mod (1+ (or (or-struktur--list-binary-search-ceil sizes size)
+                             (1- (length sizes))))
+                     (length sizes))))
+      (or-struktur-view--layout side (nth index sizes))
+      (or-struktur-view--display-buffer buf))))
+
 (defun or-struktur-view--font-lock-sync (beg end buffer)
   "Fontify currently selected indirect BUFFER from BEG to END."
   (with-current-buffer buffer
-    (or-struktur--message "FL '%s' %s %s %s"
-                          buffer beg end
-                          (text-property-any beg end 'fontified nil buffer))
     (when (and (derived-mode-p 'or-struktur-view-mode)
                (> (- end beg) 1)
                (buffer-base-buffer buffer)
@@ -1150,25 +1173,19 @@ When not given, SIDE defaults to the first entry in `or-struktur-view-layout'."
       (font-lock-flush beg end)
       (font-lock-ensure beg end))))
 
-(defun or-struktur-view--display-buffer (buffer &optional win-side win-size)
+(defun or-struktur-view--display-buffer (buffer)
   "Display strukturzettel indirect BUFFER on WIN-SIDE with WIN-SIZE.
 This function returns the newly created side window."
   (pcase-let*
-      ((`(,side . ,size) (or-struktur-view--layout-current win-side))
-       (window-size (cons (if (member side '(top bottom))
-                              'window-height 'window-width)
-                          (or win-size size))))
-    (with-current-buffer buffer
-      (unless (derived-mode-p 'or-struktur-view-mode)
-        ;; Hack to preserve `header-line-format', which some major modes clear.
-        (let ((hlf header-line-format))
-          (or-struktur-view-mode)
-          (setq header-line-format hlf))))
+      ((`(,side . ,size) (or-struktur-view--layout))
+       (win-size (cons (if (member side '(top bottom))
+                           'window-height 'window-width)
+                       size)))
     (let ((win (display-buffer buffer
                                `(display-buffer-in-side-window
                                  . ((side . ,side)
-                                    (slot . -1)
-                                    ,window-size
+                                    (slot . -1) ; TODO: Ensure no conflict
+                                    ,win-size
                                     (dedicated . t)
                                     (window-parameters
                                      . ((no-delete-other-windows . t)
@@ -1181,7 +1198,7 @@ This function returns the newly created side window."
       win)))
 
 (defun or-struktur-view--display-indirect-buffer (node)
-  "Display indirect buffer of NODE."
+  "Display indirect buffer of NODE in view mode."
   (let* ((name (format "%s<%s>"
                        or-struktur-view--buffer-name
                        (org-roam-node-id node)))
@@ -1190,6 +1207,8 @@ This function returns the newly created side window."
                    (find-file-noselect (org-roam-node-file node))
                    name))))
     (with-current-buffer buf
+      (unless (derived-mode-p 'or-struktur-view-mode)
+        (or-struktur-view-mode))
       (setq header-line-format
             (propertize (format "%s" (org-roam-node-title node))
                         'face 'header-line
@@ -1198,7 +1217,7 @@ This function returns the newly created side window."
 
 (defun or-struktur-view--shown-p (id)
   "Return the view window if node with ID is already shown."
-  (when-let* ((win (or-struktur-view--get-window)))
+  (when-let* ((win (or-struktur-view--window)))
     (and (eq (buffer-base-buffer (window-buffer win))
              (find-buffer-visiting
               (org-roam-node-file
@@ -1211,7 +1230,7 @@ If the current node is associated with a strukturzettel, the point will be on
 the entry line in that strukturzettel if displayed in the view window.
 
 If FOCUS is non-nil, select the view window."
-  (let ((win (or-struktur-view--get-window))
+  (let ((win (or-struktur-view--window))
         sz-node sz-line)
     ;; Look for target strukturzettel buffer and its line number for the node at
     ;; point.
@@ -1272,7 +1291,7 @@ If FOCUS is non-nil, select the view window."
 (defun or-struktur-view--hide ()
   "Hide strukturzettel window.
 This function returns non-nil if a strukturzettel window exists and is deleted."
-  (when-let* ((win (or-struktur-view--get-window)))
+  (when-let* ((win (or-struktur-view--window)))
     (delete-window win)
     t))
 
