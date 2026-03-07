@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.20.1
+;; Version: 0.21.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -643,18 +643,19 @@ The function FILTER-FN takes an SID and returns related nodes."
 (defvar-keymap or-struktur-view-mode-map
   :doc "Keymap for `or-struktur-mode' under prefix."
   ;; Similar to org-speed-command:
-  "n" #'org-next-visible-heading
-  "p" #'org-previous-visible-heading
-  "f" #'org-forward-heading-same-level
-  "b" #'org-backward-heading-same-level
-  "u" #'outline-up-heading
+  "n" #'or-struktur-view-next-headline
+  "p" #'or-struktur-view-previous-headline
+  "f" #'or-struktur-view-next-sibling-headline
+  "b" #'or-struktur-view-previous-sibling-headline
+  "u" #'or-struktur-view-parent-headline
 
-  "i" #'imenu
-  "o" #'or-struktur-view-node-open
-  "v" #'or-struktur-view-org-return
-  "<return>" #'or-struktur-view-org-return
-  "<backtab>" #'org-shifttab
-  "<tab>" #'org-cycle
+  "o" #'or-struktur-view-open-zettel
+  "v" #'or-struktur-view-visit-zettel
+  "<return>" #'or-struktur-view-visit-zettel
+
+  "i" #'or-struktur-view-imenu
+  "<backtab>" #'or-struktur-view-cycle-global-visibility
+  "<tab>" #'or-struktur-view-cycle-visibility
 
   "C" #'or-struktur-view-insert-child
   "S" #'or-struktur-view-insert-sibling
@@ -662,14 +663,15 @@ The function FILTER-FN takes an SID and returns related nodes."
   "T" #'or-struktur-view-edit-link-desc
   "E" #'or-struktur-view-edit
 
-  "O" #'or-struktur-view-switch-node
-  "R" #'font-lock-fontify-buffer
-  "V" #'or-struktur-view-preview-toggle
+  "O" #'or-struktur-view-switch-strukturzettel
+  "L t" #'or-struktur-view-top
+  "L r" #'or-struktur-view-right
+  "L b" #'or-struktur-view-bottom
+  "L l" #'or-struktur-view-left
+  "W" #'or-struktur-view-expand
 
-  "W t" #'or-struktur-view-top
-  "W r" #'or-struktur-view-right
-  "W b" #'or-struktur-view-bottom
-  "W l" #'or-struktur-view-left)
+  "V" #'or-struktur-view-preview-toggle
+  "R" #'font-lock-fontify-buffer)
 
 (set-keymap-parent or-struktur-view-mode-map text-mode-map)
 
@@ -730,7 +732,8 @@ The function FILTER-FN takes an SID and returns related nodes."
     (or-struktur-view--font-lock-sync beg end (current-buffer))))
 
 (defun or-struktur-view--on-post-node-insert (id desc)
-  (or-struktur-view-refresh-tags))
+  (or-struktur-view--modify
+   (or-struktur-view-tags-refresh)))
 
 (defun or-struktur-view--on-window-scroll (win beg)
   (let ((end (window-end win t)))
@@ -873,7 +876,42 @@ Add this to `post-command-hook'."
       (set-window-fringes (selected-window) nil nil t)
       (setq-local or-struktur-view-modified--cookie nil))))
 
-(defun or-struktur-view-org-return (&rest _rest)
+(defun or-struktur-view-next-headline ()
+  (interactive)
+  (call-interactively #'org-next-visible-heading))
+
+(defun or-struktur-view-previous-headline ()
+  (interactive)
+  (call-interactively #'org-previous-visible-heading))
+
+(defun or-struktur-view-next-sibling-headline ()
+  (interactive)
+  (call-interactively #'org-forward-heading-same-level))
+
+(defun or-struktur-view-previous-sibling-headline ()
+  (interactive)
+  (call-interactively #'org-backward-heading-same-level))
+
+(defun or-struktur-view-parent-headline ()
+  (interactive)
+  (call-interactively #'outline-up-heading))
+
+(defun or-struktur-view-open-zettel ()
+  "Open zettel node at line in another window."
+  (interactive)
+  (when-let*
+      ((node (or-struktur-view--headline-linked-node))
+       (file (org-roam-node-file node))
+       (buf (find-file-noselect file))
+       (win (get-mru-window nil t t)))
+    (display-buffer buf
+                    `((;; display-buffer-in-previous-window
+                       display-buffer-reuse-window
+                       display-buffer-use-some-window)
+                      (inhibit-same-window . t)
+                      (window . ,win)))))
+
+(defun or-struktur-view-visit-zettel (&rest _rest)
   "Override `org-return' for faster navigation.
 This command changes default behavior to find a link on current header and visit
 if such a link exists."
@@ -882,45 +920,20 @@ if such a link exists."
       (org-roam-node-visit node)
     (apply #'org-return _rest)))
 
-(defun or-struktur-view-node-open ()
-  "Open node at point in another window."
+(defun or-struktur-view-imenu ()
+  "Run `imenu' on buffer."
   (interactive)
-  (when-let*
-      ((node (or-struktur-view--headline-linked-node))
-       (file (org-roam-node-file node))
-       (buf (find-file-noselect file))
-       (win (get-mru-window nil t t)))
-    (display-buffer buf
-                    `((
-                       ;; display-buffer-in-previous-window
-                       display-buffer-reuse-window
-                       display-buffer-use-some-window)
-                      (inhibit-same-window . t)
-                      (window . ,win)))))
+  (imenu))
 
-(defun or-struktur-view-switch-node ()
-  "Switch to different strukturzettel node."
+(defun or-struktur-view-cycle-global-visibility ()
+  "Run `org-cycle-global'."
   (interactive)
-  (when-let* ((node (or-struktur-sz-select))
-              (win (or-struktur-view--get-window))
-              (buf (window-buffer win)))
-    (delete-window win)
-    (kill-buffer buf)
-    (setq win (or-struktur-view--display-indirect-buffer node))
-    (select-window win 'norecord)))
+  (org-cycle-global))
 
-(defun or-struktur-view-edit ()
-  "Edit strukturzettel node as regular Org buffer."
+(defun or-struktur-view-cycle-visibility ()
+  "Run `org-cycle'."
   (interactive)
-  (when-let*
-      ((pos (point))
-       (node (org-roam-node-at-point))
-       (buf (progn (org-roam-node-visit node)
-                   (get-file-buffer (org-roam-node-file node)))))
-    (with-current-buffer buf
-      (goto-char pos)
-      (org-fold-show-context)
-      (recenter))))
+  (org-cycle))
 
 (defun or-struktur-view--capture-active-p ()
   "Non-nil if at least one org-capture buffer is live (pre-finalize)."
@@ -1030,13 +1043,31 @@ if such a link exists."
      (insert (format "[[%s:%s][%s]]" type id desc)))
    (or-struktur-view-tags-refresh)))
 
-(defun or-struktur-view-refresh-tags ()
-  "Refresh tags."
+(defun or-struktur-view-edit ()
+  "Edit strukturzettel node as regular Org buffer."
   (interactive)
-  (or-struktur-view--modify
-   (or-struktur-view-tags-refresh)))
+  (when-let*
+      ((pos (point))
+       (node (org-roam-node-at-point))
+       (buf (progn (org-roam-node-visit node)
+                   (get-file-buffer (org-roam-node-file node)))))
+    (with-current-buffer buf
+      (goto-char pos)
+      (org-fold-show-context)
+      (recenter))))
 
 ;;; Strukturzettel Window Management
+
+(defun or-struktur-view-switch-strukturzettel ()
+  "Switch to different strukturzettel node."
+  (interactive)
+  (when-let* ((node (or-struktur-sz-select))
+              (win (or-struktur-view--get-window))
+              (buf (window-buffer win)))
+    (delete-window win)
+    (kill-buffer buf)
+    (setq win (or-struktur-view--display-indirect-buffer node))
+    (select-window win 'norecord)))
 
 ;;;###autoload
 (defun or-struktur-view-focus ()
@@ -1072,6 +1103,20 @@ strukturzettel."
   "Layout strukturzettel view to left."
   (interactive)
   (or-struktur-view--layout-side 'left))
+
+(defun or-struktur-view-expand ()
+  "Expand side window."
+  (interactive)
+  (when-let* ((win (or-struktur-view--get-window))
+              (buf (window-buffer win))
+              (current-size (/ (float (window-total-width win))
+                               (frame-width (window-frame win)))))
+    (pcase-let*
+        ((`(,side . ,size) (or-struktur-view--layout-current))
+         (size (if (< current-size 0.5)
+                   (min 0.5 (+ current-size size))
+                 size)))
+      (or-struktur-view--display-buffer buf side size))))
 
 (defun or-struktur-view--layout-current (&optional side)
   "Set layout to SIDE or get currently active layout when SIDE is not given.
@@ -1128,16 +1173,14 @@ When not given, SIDE defaults to the first entry in `or-struktur-view-layout'."
       (font-lock-flush beg end)
       (font-lock-ensure beg end))))
 
-(defun or-struktur-view--display-buffer (buffer &optional side)
-  "Display strukturzettel indirect BUFFER in SIDE window.
+(defun or-struktur-view--display-buffer (buffer &optional win-side win-size)
+  "Display strukturzettel indirect BUFFER on WIN-SIDE with WIN-SIZE.
 This function returns the newly created side window."
   (pcase-let*
-      ((`(,side . ,size)
-        (or-struktur-view--layout-current side))
-       (window-size
-        (cons (if (member side '(top bottom))
-                  #'window-height #'window-width)
-              size)))
+      ((`(,side . ,size) (or-struktur-view--layout-current win-side))
+       (window-size (cons (if (member side '(top bottom))
+                              'window-height 'window-width)
+                          (or win-size size))))
     (with-current-buffer buffer
       (unless (derived-mode-p 'or-struktur-view-mode)
         ;; Hack to preserve `header-line-format', which some major modes clear.
@@ -1155,6 +1198,7 @@ This function returns the newly created side window."
                                         (no-other-window . t)
                                         (mode-line-format . none)
                                         (dedicated . t))))))))
+      (set-window-fringes win 0 0)
       (or-struktur-view--font-lock-sync
        (window-start win) (window-end win t) buffer)
       win)))
