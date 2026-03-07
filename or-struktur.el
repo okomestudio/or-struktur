@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.21.2
+;; Version: 0.21.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -652,9 +652,9 @@ The function FILTER-FN takes an SID and returns related nodes."
   "<backtab>" #'or-struktur-view-cycle-global-visibility
   "<tab>" #'or-struktur-view-cycle-visibility
 
-  "C" #'or-struktur-view-insert-child
-  "S" #'or-struktur-view-insert-sibling
-  "D" #'or-struktur-view-delete-subtree
+  "C c" #'or-struktur-view-insert-child
+  "C s" #'or-struktur-view-insert-sibling
+  "D t" #'or-struktur-view-delete-subtree
   "T" #'or-struktur-view-edit-link-desc
   "E" #'or-struktur-view-edit
 
