@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.19.10
+;; Version: 0.20.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -1140,7 +1140,10 @@ This function returns the newly created side window."
               size)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'or-struktur-view-mode)
-        (or-struktur-view-mode)))
+        ;; Hack to preserve `header-line-format', which some major modes clear.
+        (let ((hlf header-line-format))
+          (or-struktur-view-mode)
+          (setq header-line-format hlf))))
     (let ((win (display-buffer buffer
                                `(display-buffer-in-side-window
                                  . ((side . ,side)
@@ -1165,6 +1168,11 @@ This function returns the newly created side window."
                   (make-indirect-buffer
                    (find-file-noselect (org-roam-node-file node))
                    name))))
+    (with-current-buffer buf
+      (setq header-line-format
+            (propertize (format "%s" (org-roam-node-title node))
+                        'face 'header-line
+                        'cursor-intangible t)))
     (or-struktur-view--display-buffer buf)))
 
 (defun or-struktur-view--shown-p (id)
