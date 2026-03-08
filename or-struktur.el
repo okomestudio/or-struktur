@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.22.1
+;; Version: 0.22.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -1056,13 +1056,11 @@ if such a link exists."
 (defun or-struktur-view-switch-strukturzettel ()
   "Switch to different strukturzettel node."
   (interactive)
-  (when-let* ((node (or-struktur-sz-select))
-              (win (or-struktur-view--window))
-              (buf (window-buffer win)))
-    (delete-window win)
-    (kill-buffer buf)
-    (setq win (or-struktur-view--display-indirect-buffer node))
-    (select-window win 'norecord)))
+  (when-let* ((node (or-struktur-sz-select)))
+    (when-let* ((win (or-struktur-view--window)))
+      (delete-window win))
+    (select-window (or-struktur-view--display-indirect-buffer node)
+                   'norecord)))
 
 ;;;###autoload
 (defun or-struktur-view-focus ()
@@ -1077,7 +1075,7 @@ strukturzettel."
   "Toggle strukturzettel view."
   (interactive)
   (unless (or-struktur-view--hide)
-    (or-struktur-view--show)))
+    (or-struktur-view--show 'focus)))
 
 (defun or-struktur-view-top ()
   "Layout strukturzettel view to top."
@@ -1143,7 +1141,7 @@ Top entry is the current or most recently used layout.")
       (or-struktur-view--layout side)
       (setq win (or-struktur-view--display-buffer buf))
       (when pos
-        (select-window win)
+        (select-window win 'norecord)
         (goto-char pos)
         (org-reveal)
         (recenter)))))
@@ -1184,7 +1182,7 @@ This function returns the newly created side window."
     (let ((win (display-buffer buffer
                                `(display-buffer-in-side-window
                                  . ((side . ,side)
-                                    (slot . -1) ; TODO: Ensure no conflict
+                                    (slot . 0) ; TODO: Ensure no conflict
                                     ,win-size
                                     (dedicated . t)
                                     (window-parameters
@@ -1193,6 +1191,7 @@ This function returns the newly created side window."
                                         (mode-line-format . none)
                                         (dedicated . t))))))))
       (set-window-fringes win 0 0)
+      (set-window-dedicated-p win 'side)
       (or-struktur-view--font-lock-sync
        (window-start win) (window-end win t) buffer)
       win)))
