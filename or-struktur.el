@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.22.2
+;; Version: 0.22.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -1241,11 +1241,10 @@ If FOCUS is non-nil, select the view window."
                   sz-line (line-number-at-pos (point) t))
             (unless (or-struktur-view--shown-p (org-roam-node-id sz-node))
               (when win
-                (delete-window win))))
-        (when-let*
-            ((node (and (derived-mode-p 'org-mode) (org-roam-node-at-point)))
-             (id (and node (org-roam-node-id node)))
-             (items (and id (or-struktur-sid--from-id id 'extra))))
+                (delete-window win)
+                (setq win nil))))
+        (when-let* ((id (org-roam-node-id node))
+                    (items (and id (or-struktur-sid--from-id id 'extra))))
           (unless
               (seq-find
                (lambda (item)
@@ -1264,7 +1263,8 @@ If FOCUS is non-nil, select the view window."
                     sz-line pos)
               (unless (or-struktur-view--shown-p sz-id)
                 (when win
-                  (delete-window win))))))))
+                  (delete-window win)
+                  (setq win nil))))))))
 
     (unless win
       (if-let* ((buf (cl-find-if
