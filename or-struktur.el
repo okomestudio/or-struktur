@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.22.4
+;; Version: 0.23.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -955,29 +955,18 @@ if such a link exists."
           (base-buf (buffer-base-buffer))
           (inhibit-read-only t))
      (read-only-mode -1)
-     (unwind-protect
-         (condition-case err
-             (progn ,@body)
-           (quit              ; quit from `completing-read'
-            (with-current-buffer base-buf
-              (revert-buffer nil t)))
-           (user-error        ; abort capture before creating node
-            (with-current-buffer base-buf
-              (revert-buffer nil t)))
-           (error
-            (with-current-buffer base-buf
-              (revert-buffer nil t))
-            (signal (car err) (cdr err))))
+     (atomic-change-group
+       ,@body)
 
-       ;; Do not save buffer if a capture is in session, in which case
-       ;; save-or-revert is handled in the capture's after-finalize hook.
-       (unless (or-struktur-view--capture-active-p)
-         (with-current-buffer base-buf
-           (when (buffer-modified-p)
-             (save-buffer))))
+     ;; Do not save buffer if a capture is in session, in which case
+     ;; save-or-revert is handled in the capture's after-finalize hook.
+     (unless (or-struktur-view--capture-active-p)
+       (with-current-buffer base-buf
+         (when (buffer-modified-p)
+           (save-buffer))))
 
-       (with-current-buffer buf
-         (read-only-mode +1)))))
+     (with-current-buffer buf
+       (read-only-mode +1))))
 
 (defmacro or-struktur-view--refresh-subtree (&rest body)
   `(let ((buf (current-buffer))
