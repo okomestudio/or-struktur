@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.22.3
+;; Version: 0.22.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -254,12 +254,22 @@ Either nil or `minibuffer' is allowed."
   (or-struktur--ov-refresh beg (window-end win t) (window-buffer win)))
 
 (defun or-struktur-mode--on-after-save ()
+  ;; NOTE: Even when the save is performed in an indirect buffer, the hook runs
+  ;; on their base buffers.
   (or-struktur--db-from-strukturzettel)
+
+  (when-let* ((buf (current-buffer))
+              (win (get-buffer-window buf))
+              (beg (window-start win))
+              (end (window-end win t)))
+    (or-struktur--ov-refresh beg end buf))
+
+  ;; Update struktur view window if visible.
   (when-let* ((win (or-struktur-view--window))
               (beg (window-start win))
               (end (window-end win t)))
     (with-selected-window win
-      (let ((buf (window-buffer win)))
+      (let ((buf (current-buffer)))
         (or-struktur--ov-refresh beg end buf)
         (or-struktur-view--font-lock-sync beg end buf)))))
 
@@ -746,7 +756,8 @@ The function FILTER-FN takes an SID and returns related nodes."
 
 (defun or-struktur-view--on-post-node-insert (id desc)
   (or-struktur-view--modify
-   (or-struktur-view-tags-refresh)))
+   (or-struktur-view-tags-refresh))
+  (move-beginning-of-line 1))
 
 (defun or-struktur-view--on-window-scroll (win beg)
   (let ((end (window-end win t)))
@@ -991,8 +1002,7 @@ if such a link exists."
    (or-struktur--db-from-strukturzettel)
    (or-struktur-view--refresh-subtree
     (org-roam-node-insert)
-    (or-struktur--db-from-strukturzettel))
-   (move-beginning-of-line 1)))
+    (or-struktur--db-from-strukturzettel))))
 
 (defun or-struktur-view-insert-sibling ()
   "Insert sibling of current headline."
@@ -1003,8 +1013,7 @@ if such a link exists."
    (or-struktur--db-from-strukturzettel)
    (or-struktur-view--refresh-subtree
     (org-roam-node-insert)
-    (or-struktur--db-from-strukturzettel))
-   (move-beginning-of-line 1)))
+    (or-struktur--db-from-strukturzettel))))
 
 (defun or-struktur-view-delete-subtree ()
   "Delete subtree of current headline."
@@ -1267,16 +1276,17 @@ If FOCUS is non-nil, select the view window."
                   (setq win nil))))))))
 
     (unless win
-      (if-let* ((buf (cl-find-if
-                      (lambda (buf)
-                        (and (buffer-live-p buf)
-                             (string-prefix-p or-struktur-view--buffer-name
-                                              (buffer-name buf))))
-                      (buffer-list))))
-          (setq win (or-struktur-view--display-buffer buf))
-        (unless sz-node
-          (setq sz-node (or-struktur-sz-select)))
-        (setq win (or-struktur-view--display-indirect-buffer sz-node))))
+      (setq win
+            (if sz-node
+                (or-struktur-view--display-indirect-buffer sz-node)
+              (if-let* ((buf (cl-find-if
+                              (lambda (buf)
+                                (and (buffer-live-p buf)
+                                     (string-prefix-p or-struktur-view--buffer-name
+                                                      (buffer-name buf))))
+                              (buffer-list))))
+                  (or-struktur-view--display-buffer buf)
+                (or-struktur-view--display-indirect-buffer (or-struktur-sz-select))))))
 
     (when sz-line
       (with-selected-window win
