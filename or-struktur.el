@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.23.1
+;; Version: 0.24.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -682,7 +682,17 @@ The function FILTER-FN takes an SID and returns related nodes."
 
   "C c" #'or-struktur-view-insert-child
   "C s" #'or-struktur-view-insert-sibling
-  "D t" #'or-struktur-view-delete-subtree
+
+  "M-<left>" #'or-struktur-view-do-headline-promote
+  "M-<right>" #'or-struktur-view-do-headline-demote
+  "M-S-<left>" #'or-struktur-view-do-subtree-promote
+  "M-S-<right>" #'or-struktur-view-do-subtree-demote
+  "M-<down>" #'or-struktur-view-do-subtree-move-down
+  "M-<up>" #'or-struktur-view-do-subtree-move-up
+  "S k" #'or-struktur-view-do-subtree-cut
+  "S y c" #'or-struktur-view-do-subtree-paste-as-child
+  "S y s" #'or-struktur-view-do-subtree-paste-as-sibling
+
   "T" #'or-struktur-view-edit-link-desc
   "E" #'or-struktur-view-edit
 
@@ -942,7 +952,9 @@ if such a link exists."
   (org-cycle))
 
 (defun or-struktur-view--capture-active-p ()
-  "Non-nil if at least one org-capture buffer is live (pre-finalize)."
+  "Return non-nil if at least one `org-capture' buffer is live (pre-finalize)."
+  ;; TODO(2026-03-09): For accurate identification, try to detect the live
+  ;; capture session is initiated within `or-struktur-view--modify'?
   (seq-some (lambda (buf)
               (with-current-buffer buf
                 (and (derived-mode-p 'org-mode)
@@ -957,7 +969,6 @@ if such a link exists."
      (read-only-mode -1)
      (atomic-change-group
        ,@body)
-
      ;; Do not save buffer if a capture is in session, in which case
      ;; save-or-revert is handled in the capture's after-finalize hook.
      (unless (or-struktur-view--capture-active-p)
@@ -990,8 +1001,7 @@ if such a link exists."
    (org-do-demote)
    (or-struktur--db-from-strukturzettel)
    (or-struktur-view--refresh-subtree
-    (org-roam-node-insert)
-    (or-struktur--db-from-strukturzettel))))
+    (org-roam-node-insert))))
 
 (defun or-struktur-view-insert-sibling ()
   "Insert sibling of current headline."
@@ -1001,19 +1011,61 @@ if such a link exists."
      (org-insert-heading))
    (or-struktur--db-from-strukturzettel)
    (or-struktur-view--refresh-subtree
-    (org-roam-node-insert)
-    (or-struktur--db-from-strukturzettel))))
+    (org-roam-node-insert))))
 
-(defun or-struktur-view-delete-subtree ()
-  "Delete subtree of current headline."
+(defun or-struktur-view-do-headline-demote ()
+  "Demote current headline."
+  (interactive)
+  (or-struktur-view--modify (org-do-demote)))
+
+(defun or-struktur-view-do-headline-promote ()
+  "Promote current headline."
+  (interactive)
+  (or-struktur-view--modify (org-do-promote)))
+
+(defun or-struktur-view-do-subtree-demote ()
+  "Demote current subtree."
+  (interactive)
+  (or-struktur-view--modify (org-demote-subtree)))
+
+(defun or-struktur-view-do-subtree-promote ()
+  "Promote current subtree."
+  (interactive)
+  (or-struktur-view--modify (org-promote-subtree)))
+
+(defun or-struktur-view-do-subtree-move-down ()
+  "Move down current subtree."
+  (interactive)
+  (or-struktur-view--modify (org-move-subtree-down)))
+
+(defun or-struktur-view-do-subtree-move-up ()
+  "Move up current subtree."
+  (interactive)
+  (or-struktur-view--modify (org-move-subtree-up)))
+
+(defun or-struktur-view-do-subtree-cut ()
+  "Cut subtree at point."
   (interactive)
   (or-struktur-view--modify
    (beginning-of-line)
    (or-struktur-view--refresh-subtree
-    (org-mark-subtree)
-    (kill-region (region-beginning) (region-end))
-    (deactivate-mark))
-   (or-struktur--db-from-strukturzettel)))
+    (org-cut-subtree))))
+
+(defun or-struktur-view-do-subtree-paste-as-sibling ()
+  "Paste subtree most recently cut."
+  (interactive)
+  (or-struktur-view--modify
+   (beginning-of-line)
+   (or-struktur-view--refresh-subtree
+    (org-paste-subtree '(4)))))
+
+(defun or-struktur-view-do-subtree-paste-as-child ()
+  "Paste subtree most recently cut."
+  (interactive)
+  (or-struktur-view--modify
+   (beginning-of-line)
+   (or-struktur-view--refresh-subtree
+    (org-paste-subtree '(16)))))
 
 (defun or-struktur-view-edit-link-desc ()
   "Edit link description."
