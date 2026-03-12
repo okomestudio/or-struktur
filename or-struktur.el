@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.24.1
+;; Version: 0.24.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -704,7 +704,9 @@ The function FILTER-FN takes an SID and returns related nodes."
   "W" #'or-struktur-view-expand
 
   "V" #'or-struktur-view-preview-toggle
-  "R" #'font-lock-fontify-buffer)
+  "R" #'font-lock-fontify-buffer
+
+  "q" #'delete-window)
 
 (set-keymap-parent or-struktur-view-mode-map text-mode-map)
 
@@ -732,6 +734,8 @@ The function FILTER-FN takes an SID and returns related nodes."
 (defun or-struktur-view--on-after-change-major-mode ()
   (when (derived-mode-p 'or-struktur-view-mode)
     (unless (buffer-narrowed-p)
+      ;; Narrow to content, hiding file properties, etc.
+      (widen)
       (goto-char (point-min))
       (when (re-search-forward org-outline-regexp-bol nil t)
         (narrow-to-region (point-at-bol) (point-max))))))
@@ -1086,7 +1090,8 @@ if such a link exists."
      (goto-char beg)
      (delete-region beg end)
      (insert (format "[[%s:%s][%s]]" type id desc)))
-   (or-struktur-view-tags-refresh)))
+   (or-struktur-view-tags-refresh)
+   (move-beginning-of-line 1)))
 
 (defun or-struktur-view-edit ()
   "Edit strukturzettel node as regular Org buffer."
@@ -1113,19 +1118,23 @@ if such a link exists."
                    'norecord)))
 
 ;;;###autoload
-(defun or-struktur-view-focus ()
-  "Put focus on strukturzettel view.
-If the current buffer is a strukturzettel, the point will be on its entry in the
-strukturzettel."
+(defun or-struktur-view-show ()
+  "Show sturkturzettel view."
   (interactive)
   (or-struktur-view--show 'focus))
+
+;;;###autoload
+(defun or-struktur-view-hide ()
+  "Hide sturkturzettel view."
+  (interactive)
+  (or-struktur-view--hide))
 
 ;;;###autoload
 (defun or-struktur-view-toggle ()
   "Toggle strukturzettel view."
   (interactive)
-  (unless (or-struktur-view--hide)
-    (or-struktur-view--show 'focus)))
+  (unless (or-struktur-view-hide)
+    (or-struktur-view-show)))
 
 (defun or-struktur-view-top ()
   "Layout strukturzettel view to top."
@@ -1210,14 +1219,19 @@ Top entry is the current or most recently used layout.")
       (or-struktur-view--layout side (nth index sizes))
       (or-struktur-view--display-buffer buf))))
 
-(defun or-struktur-view--font-lock-sync (beg end buffer)
+(defun or-struktur-view--font-lock-sync (beg end buffer &optional force debug)
   "Fontify currently selected indirect BUFFER from BEG to END."
   (with-current-buffer buffer
+    (when debug
+      (or-struktur--message "BUFFER:%s[%s:%s] TPA:%s"
+                            buffer beg end
+                            (text-property-any beg end
+                                               'fontified nil buffer)))
     (when (and (derived-mode-p 'or-struktur-view-mode)
                (> (- end beg) 1)
                (buffer-base-buffer buffer)
                (buffer-live-p (buffer-base-buffer buffer))
-               (text-property-any beg end 'fontified nil buffer))
+               (or force (text-property-any beg end 'fontified nil buffer)))
       (font-lock-flush beg end)
       (font-lock-ensure beg end))))
 
@@ -1240,10 +1254,10 @@ This function returns the newly created side window."
                                         (no-other-window . t)
                                         (mode-line-format . none)
                                         (dedicated . t))))))))
-      (set-window-fringes win 0 0)
-      (set-window-dedicated-p win 'side)
-      (or-struktur-view--font-lock-sync
-       (window-start win) (window-end win t) buffer)
+      (let* ((end (window-end win t))
+             (beg (window-start win)))
+        (font-lock-flush beg end)
+        (font-lock-ensure beg end))
       win)))
 
 (defun or-struktur-view--display-indirect-buffer (node)
