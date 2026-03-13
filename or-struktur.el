@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.24.2
+;; Version: 0.25.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -1121,7 +1121,7 @@ if such a link exists."
 (defun or-struktur-view-show ()
   "Show sturkturzettel view."
   (interactive)
-  (or-struktur-view--show 'focus))
+  (or-struktur-view--show 'select))
 
 ;;;###autoload
 (defun or-struktur-view-hide ()
@@ -1256,8 +1256,9 @@ This function returns the newly created side window."
                                         (dedicated . t))))))))
       (let* ((end (window-end win t))
              (beg (window-start win)))
-        (font-lock-flush beg end)
-        (font-lock-ensure beg end))
+        (with-current-buffer (window-buffer win)
+          (font-lock-flush beg end)
+          (font-lock-ensure beg end)))
       win)))
 
 (defun or-struktur-view--display-indirect-buffer (node)
@@ -1287,12 +1288,26 @@ This function returns the newly created side window."
                (org-roam-node-from-id id))))
          win)))
 
-(defun or-struktur-view--show (&optional focus)
-  "Show strukturzettel window.
-If the current node is associated with a strukturzettel, the point will be on
-the entry line in that strukturzettel if displayed in the view window.
+(defun or-struktur-view--show (&optional select)
+  "Show side view window with strukturzettel.
+Which strukturzettel buffer gets displayed will be based on the object at point,
+in order of precedence:
 
-If FOCUS is non-nil, select the view window."
+  - If the point is at an Org link which references an `org-roam' node belonging
+    in a strukturzettel, that structurzettel will be displayed with the point on
+    the link referencing the same note.
+
+  - If the at-point node is a strukturzettel (visited as a base buffer), its
+    indirect buffer will be displayed with the current point preserved.
+
+  - If the at-point node is associated with a strukturzettel, that
+    strukturzettel will be displayed with the point on the line referencing the
+    node.
+
+  - If none of the above is true, the user will be prompted for a strukturzettel
+    to display.
+
+If SELECT is non-nil, select the window after it becomes visible."
   (let ((win (or-struktur-view--window))
         sz-node sz-line)
     ;; Look for target strukturzettel buffer and its line number for the node at
@@ -1307,8 +1322,18 @@ If FOCUS is non-nil, select the view window."
               (when win
                 (delete-window win)
                 (setq win nil))))
-        (when-let* ((id (org-roam-node-id node))
-                    (items (and id (or-struktur-sid--from-id id 'extra))))
+        (when-let*
+            ((items
+              (or (or-struktur-sid--from-id
+                   (when-let*
+                       ((elmt (org-element-context))
+                        (lnk (and (eq (org-element-type elmt) 'link) elmt))
+                        (type (org-element-property :type lnk))
+                        (path (and (string= type "id")
+                                   (org-element-property :path lnk))))
+                     (car (split-string path "::" t)))
+                   'extra)
+                  (or-struktur-sid--from-id (org-roam-node-id node) 'extra))))
           (unless
               (seq-find
                (lambda (item)
@@ -1349,7 +1374,7 @@ If FOCUS is non-nil, select the view window."
         (org-reveal 'siblings)
         (recenter)))
 
-    (when (and focus win)
+    (when (and select win)
       (select-window win 'norecord))))
 
 (defun or-struktur-view--hide ()
