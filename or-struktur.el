@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.25.1
+;; Version: 0.25.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -318,7 +318,7 @@ entry."
       (with-current-buffer buf
         (or-struktur--db-from-strukturzettel)
         (unless buf-open
-          (kill-this-buffer))))))
+          (kill-current-buffer))))))
 
 (defun or-struktur--db-init-maybe ()
   "If mapping storage is empty, initialize."
