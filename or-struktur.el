@@ -812,10 +812,11 @@ The function FILTER-FN takes an SID and returns related nodes."
   (when (derived-mode-p 'or-struktur-view-mode)
     (unless (buffer-narrowed-p)
       ;; Narrow to content, hiding file properties, etc.
-      (widen)
-      (goto-char (point-min))
-      (when (re-search-forward org-outline-regexp-bol nil t)
-        (narrow-to-region (point-at-bol) (point-max))))))
+      ;; (widen)
+      ;; (goto-char (point-min))
+      ;; (when (re-search-forward org-outline-regexp-bol nil t)
+      ;;   (narrow-to-region (point-at-bol) (point-max)))
+      )))
 
 (defun or-struktur-view--on-capture-before-finalize ()
   (when-let*
@@ -1302,7 +1303,7 @@ Top entry is the current or most recently used layout.")
       (when pos
         (select-window win 'norecord)
         (goto-char pos)
-        (org-reveal)
+        ;; (org-reveal)
         (recenter)))))
 
 (defun or-struktur-view--window-expand ()
@@ -1366,17 +1367,33 @@ This function returns the newly created side window."
   (let* ((name (format "%s<%s>"
                        or-struktur-view--buffer-name
                        (org-roam-node-id node)))
-         (buf (or (get-buffer name)
-                  (make-indirect-buffer
-                   (find-file-noselect (org-roam-node-file node))
-                   name))))
-    (with-current-buffer buf
-      (unless (derived-mode-p 'or-struktur-view-mode)
-        (or-struktur-view-mode))
-      (setq header-line-format
-            (propertize (format "%s" (org-roam-node-title node))
-                        'face 'header-line
-                        'cursor-intangible t)))
+         (file (org-roam-node-file node))
+         (pos (org-roam-node-point node))
+         buf offset)
+    (if (get-buffer name)
+        (setq buf (get-buffer name))
+      (setq buf (make-indirect-buffer (find-file-noselect file) name))
+      (with-current-buffer buf
+        (unless (derived-mode-p 'or-struktur-view-mode)
+          (or-struktur-view-mode))
+
+        (goto-char pos)
+        (pcase-let* ((`(,beg . ,end)
+                      (if (org-at-heading-p)
+                          (let* ((elem (org-element-at-point))
+                                 (end (org-element-property :end elem))
+                                 (beg (save-excursion
+                                        (org-next-visible-heading 1)
+                                        (point))))
+                            (cons beg end))
+                        (org-next-visible-heading 1)
+                        (cons (point) (point-max)))))
+          (narrow-to-region beg end))
+
+        (setq header-line-format
+              (propertize (format "%s" (org-roam-node-title node))
+                          'face 'header-line
+                          'cursor-intangible t))))
     (or-struktur-view--display-buffer buf)))
 
 (defun or-struktur-view--shown-p (id)
@@ -1390,28 +1407,29 @@ This function returns the newly created side window."
 
 (defun or-struktur-view--show (&optional select)
   "Show side view window with strukturzettel.
-Which strukturzettel buffer gets displayed will be based on the object at point,
-in order of precedence:
+Which strukturzettel buffer gets displayed will be based on the object
+at point, in order of precedence:
 
-  - If the point is at an Org link which references an `org-roam' node belonging
-    in a strukturzettel, that structurzettel will be displayed with the point on
-    the link referencing the same note.
+  - If the point is at an Org link which references an `org-roam' node
+    belonging in a strukturzettel, that structurzettel will be displayed
+    with the point on the link referencing the same note.
 
-  - If the at-point node is a strukturzettel (visited as a base buffer), its
-    indirect buffer will be displayed with the current point preserved.
+  - If the at-point node is a strukturzettel (visited as a base buffer),
+    its indirect buffer will be displayed with the current point
+    preserved.
 
   - If the at-point node is associated with a strukturzettel, that
-    strukturzettel will be displayed with the point on the line referencing the
-    node.
+    strukturzettel will be displayed with the point on the line
+    referencing the node.
 
-  - If none of the above is true, the user will be prompted for a strukturzettel
-    to display.
+  - If none of the above is true, the user will be prompted for a
+    strukturzettel to display.
 
 If SELECT is non-nil, select the window after it becomes visible."
   (let ((win (or-struktur-view--window))
         sz-node sz-line)
-    ;; Look for target strukturzettel buffer and its line number for the node at
-    ;; point.
+    ;; Look for target strukturzettel buffer and its line number for the
+    ;; node at point.
     (when-let* ((node (and (derived-mode-p 'org-mode)
                            (org-roam-node-at-point))))
       (if (or-struktur-sz-p node)
@@ -1439,14 +1457,15 @@ If SELECT is non-nil, select the window after it becomes visible."
                (lambda (item)
                  (pcase-let* ((`(,fz ,sz-id ,pos) item))
                    (when (and win (or-struktur-view--shown-p sz-id))
-                     ;; The target buffer is already displayed in side window,
-                     ;; so just get the target line in it.
+                     ;; The target buffer is already displayed in side
+                     ;; window, so just get the target line in it.
                      (setq sz-node (org-roam-node-from-id sz-id)
                            sz-line pos)
                      t)))
                items)
-            ;; The target buffer is yet to be displayed, so pick one, display in
-            ;; side window and record the target line in the buffer.
+            ;; The target buffer is yet to be displayed, so pick one,
+            ;; display in side window and record the target line in the
+            ;; buffer.
             (pcase-let* ((`(,fz ,sz-id ,pos) (car items)))
               (setq sz-node (org-roam-node-from-id sz-id)
                     sz-line pos)
@@ -1470,8 +1489,11 @@ If SELECT is non-nil, select the window after it becomes visible."
 
     (when sz-line
       (with-selected-window win
-        (goto-line sz-line)
-        (org-reveal 'siblings)
+        (let ((min-line (line-number-at-pos (point-min) t))
+              (max-line (line-number-at-pos (point-max) t)))
+          (if (<= min-line sz-line max-line)
+              (goto-line sz-line)))
+        ;; (org-reveal 'siblings)
         (recenter)))
 
     (when (and select win)
