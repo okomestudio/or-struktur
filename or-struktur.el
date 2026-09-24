@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.25.3
+;; Version: 0.25.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -261,6 +261,9 @@ Either nil or `minibuffer' is allowed."
 
 (defun or-struktur-mode--on ()
   "Activate `or-struktur-mode'."
+  (make-local-variable 'org-tags-exclude-from-inheritance)
+  (add-to-list 'org-tags-exclude-from-inheritance or-struktur-sz-tag)
+
   (add-hook 'or-struktur-mode-hook #'or-struktur--db-init-maybe)
   (when (or-struktur-sz-p)
     (add-hook 'after-save-hook #'or-struktur-mode--on-after-save 99 t))
@@ -275,7 +278,14 @@ Either nil or `minibuffer' is allowed."
   (remove-hook 'window-scroll-functions #'or-struktur-mode--on-window-scroll t)
   (when (or-struktur-sz-p)
     (remove-hook 'after-save-hook #'or-struktur-mode--on-after-save t))
-  (remove-hook 'or-struktur-mode-hook #'or-struktur--db-init-maybe))
+  (remove-hook 'or-struktur-mode-hook #'or-struktur--db-init-maybe)
+
+  (when (local-variable-p 'org-tags-exclude-from-inheritance)
+    (setq org-tags-exclude-from-inheritance
+          (delete or-struktur-sz-tag org-tags-exclude-from-inheritance))
+    (when (equal org-tags-exclude-from-inheritance
+                 (default-value 'org-tags-exclude-from-inheritance))
+      (kill-local-variable 'org-tags-exclude-from-inheritance))))
 
 (defun or-struktur-mode--on-before-change (beg end)
   (or-struktur--ov-remove beg end))
