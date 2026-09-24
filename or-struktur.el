@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.25.2
+;; Version: 0.25.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -106,13 +106,46 @@ Either nil or `minibuffer' is allowed."
   :type 'number
   :group 'or-struktur)
 
+(defface or-struktur-level-1 '((t :inherit org-level-1 :height 1.0 :weight normal))
+  "Face for `org-level-1' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-2 '((t :inherit org-level-2 :height 1.0 :weight normal))
+  "Face for `org-level-2' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-3 '((t :inherit org-level-3 :height 1.0 :weight normal))
+  "Face for `org-level-3' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-4 '((t :inherit org-level-4 :height 1.0 :weight normal))
+  "Face for `org-level-4' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-5 '((t :inherit org-level-5 :height 1.0 :weight normal))
+  "Face for `org-level-5' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-6 '((t :inherit org-level-6 :height 1.0 :weight normal))
+  "Face for `org-level-6' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-7 '((t :inherit org-level-7 :height 1.0 :weight normal))
+  "Face for `org-level-7' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-8 '((t :inherit org-level-8 :height 1.0 :weight normal))
+  "Face for `org-level-8' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
 (defface or-struktur-overlay
   `((t :inherit fixed-pitch
        :height 0.85
        :underline nil
        :foreground ,(face-attribute 'shadow :foreground)
        :background ,(face-attribute 'shadow :background)))
-  "Face used for SID overlays.")
+  "Face used for SID overlays."
+  :group 'or-struktur)
 
 (defconst or-struktur-view--buffer-name " strukturzettel buffer"
   "Name of indirect buffer visiting strukturzettel file.")
@@ -729,7 +762,18 @@ The function FILTER-FN takes an SID and returns related nodes."
   (make-local-variable 'default-input-method)
   (setq default-input-method nil)
   (or-struktur--disable-command 'or-struktur-view-mode
-                                #'toggle-input-method))
+                                #'toggle-input-method)
+
+  ;; Buffer-local face substitution
+  (setq-local face-remapping-alist
+              '((org-level-1 or-struktur-level-1)
+                (org-level-2 or-struktur-level-2)
+                (org-level-3 or-struktur-level-3)
+                (org-level-4 or-struktur-level-4)
+                (org-level-5 or-struktur-level-5)
+                (org-level-6 or-struktur-level-6)
+                (org-level-7 or-struktur-level-7)
+                (org-level-8 or-struktur-level-8))))
 
 (defun or-struktur-view--on-after-change-major-mode ()
   (when (derived-mode-p 'or-struktur-view-mode)
