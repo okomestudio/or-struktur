@@ -4,29 +4,29 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.25.4
+;; Version: 0.26.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
 ;;; License:
 ;;
-;; This program is free software; you can redistribute it and/or modify it under
-;; the terms of the GNU General Public License as published by the Free Software
-;; Foundation, either version 3 of the License, or (at your option) any later
-;; version.
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or (at
+;; your option) any later version.
 ;;
-;; This program is distributed in the hope that it will be useful, but WITHOUT
-;; ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-;; FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
-;; details.
+;; This program is distributed in the hope that it will be useful, but
+;; WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+;; General Public License for more details.
 ;;
-;; You should have received a copy of the GNU General Public License along with
-;; this program. If not, see <https://www.gnu.org/licenses/>.
+;; You should have received a copy of the GNU General Public License
+;; along with this program. If not, see <https://www.gnu.org/licenses/>.
 ;;
 ;;; Commentary:
 ;;
-;; This Org Roam plugin provides support for structure notes (strukturzettel in
-;; German).
+;; This Org Roam plugin provides support for structure notes
+;; (strukturzettel in German).
 ;;
 ;;; Code:
 
@@ -265,8 +265,7 @@ Either nil or `minibuffer' is allowed."
   (add-to-list 'org-tags-exclude-from-inheritance or-struktur-sz-tag)
 
   (add-hook 'or-struktur-mode-hook #'or-struktur--db-init-maybe)
-  (when (or-struktur-sz-p)
-    (add-hook 'after-save-hook #'or-struktur-mode--on-after-save 99 t))
+  (add-hook 'after-save-hook #'or-struktur-mode--on-after-save 99 t)
   (add-hook 'window-scroll-functions #'or-struktur-mode--on-window-scroll 99 t)
   (add-hook 'before-change-functions #'or-struktur-mode--on-before-change 99 t)
   (add-hook 'after-change-functions #'or-struktur-mode--on-after-change 99 t))
@@ -276,8 +275,7 @@ Either nil or `minibuffer' is allowed."
   (remove-hook 'after-change-functions #'or-struktur-mode--on-after-change t)
   (remove-hook 'before-change-functions #'or-struktur-mode--on-before-change t)
   (remove-hook 'window-scroll-functions #'or-struktur-mode--on-window-scroll t)
-  (when (or-struktur-sz-p)
-    (remove-hook 'after-save-hook #'or-struktur-mode--on-after-save t))
+  (remove-hook 'after-save-hook #'or-struktur-mode--on-after-save t)
   (remove-hook 'or-struktur-mode-hook #'or-struktur--db-init-maybe)
 
   (when (local-variable-p 'org-tags-exclude-from-inheritance)
@@ -297,9 +295,24 @@ Either nil or `minibuffer' is allowed."
   (or-struktur--ov-refresh beg (window-end win t) (window-buffer win)))
 
 (defun or-struktur-mode--on-after-save ()
-  ;; NOTE: Even when the save is performed in an indirect buffer, the hook runs
-  ;; on their base buffers.
-  (or-struktur--db-from-strukturzettel)
+  ;; NOTE: Even when the save is performed in an indirect buffer, the
+  ;; hook runs on their base buffers.
+  (mapcar (lambda (node)
+            (or-struktur--db-from-strukturzettel node))
+          (let (nodes)
+            (org-with-wide-buffer
+             (goto-char (point-min))
+             (when-let* ((file-node (org-roam-node-at-point))
+                         (_ (member or-struktur-sz-tag (org-roam-node-tags file-node))))
+               (push file-node nodes))
+             (org-map-entries
+              (lambda ()
+                (when-let* ((_ (org-entry-get (point) "ID"))
+                            (node (org-roam-node-at-point))
+                            (_ (member or-struktur-sz-tag (org-roam-node-tags node))))
+                  (push node nodes)))
+              "ID={.+}" 'file))
+            nodes))
 
   (when-let* ((buf (current-buffer))
               (win (get-buffer-window buf))
@@ -355,13 +368,7 @@ entry."
   "Fill mapping storage from all known strukturzettels."
   (or-struktur--db-clear)
   (dolist (node (or-struktur-sz-list))
-    (let* ((file (org-roam-node-file node))
-           (buf-open (get-file-buffer file))
-           (buf (or buf-open (find-file-noselect file))))
-      (with-current-buffer buf
-        (or-struktur--db-from-strukturzettel)
-        (unless buf-open
-          (kill-current-buffer))))))
+    (or-struktur--db-from-strukturzettel node)))
 
 (defun or-struktur--db-init-maybe ()
   "If mapping storage is empty, initialize."
@@ -404,38 +411,54 @@ If value is nil, returns DEFAULT."
     start))
 
 ;; TODO(2026-02-05): Improve by performing update on affected tree.
-(defun or-struktur--db-from-strukturzettel ()
-  "Update storage mapping from current strukturzettel."
-  (let* ((node (org-roam-node-at-point))
+(defun or-struktur--db-from-strukturzettel (node)
+  "Update storage mapping from the strukturzettel at NODE."
+  (let* ((file (org-roam-node-file node))
+         (pos (org-roam-node-point node))
+         (inc-self nil)
          (sz-id (org-roam-node-id node))
          (start (1- (or-struktur--conf-from-props
                      (org-roam-node-properties node))))
          (sid `(,start))
          (fdb (make-hash-table :test #'equal)))
-    (org-element-map (org-element-parse-buffer) 'headline
-      (lambda (elmt)
-        (let ((level (org-element-property :level elmt))
-              (line (line-number-at-pos (org-element-property :begin elmt) t))
-              vs)
-          (setq sid (or-struktur-sid--resize sid level))
-          (or-struktur-sid--lsd-inc sid)
-          (when-let*
-              ((lnk (org-element-map (org-element-property :title elmt) 'link
-                      #'identity nil 'first-match))
-               (id (and (equal (org-element-property :type lnk) "id")
-                        (org-element-property :path lnk))))
-            (setq vs (gethash id fdb))
-            (push (cons (copy-sequence sid) line) vs)
-            (puthash id vs fdb)
+    (unless (and file (file-exists-p file))
+      (user-error "Node file missing or invalid: %s" file))
+    (with-current-buffer (find-file-noselect file)
+      (org-with-wide-buffer
+       (goto-char pos)
+       (let ((scope (if (org-at-heading-p) 'tree 'file)))
+         (org-map-entries
+          (lambda ()
+            (unless (and (not inc-self) (= (point) pos))
+              (let* ((elmt (org-element-at-point))
+                     (level (org-element-property :level elmt))
+                     (line (line-number-at-pos (org-element-property :begin elmt) t))
+                     vs)
+                (setq sid (or-struktur-sid--resize sid level))
+                (or-struktur-sid--lsd-inc sid)
+                (when-let*
+                    ((raw-title (org-element-property :title elmt))
+                     (title-str (if (stringp raw-title)
+                                    raw-title
+                                  (org-element-interpret-data raw-title)))
+                     (parsed-title (org-element-parse-secondary-string
+                                    title-str (org-element-restriction 'headline)))
+                     (lnk (org-element-map parsed-title 'link #'identity nil 'first-match))
+                     (id (and (equal (org-element-property :type lnk) "id")
+                              (org-element-property :path lnk))))
+                  (setq vs (gethash id fdb))
+                  (push (cons (copy-sequence sid) line) vs)
+                  (puthash id vs fdb)
 
-            (let* ((key `(id ,id))
-                   (sz-ids (gethash key or-struktur--db)))
-              (cl-pushnew sz-id sz-ids :test #'equal)
-              (puthash key sz-ids or-struktur--db))
+                  (let* ((key `(id ,id))
+                         (sz-ids (gethash key or-struktur--db)))
+                    (cl-pushnew sz-id sz-ids :test #'equal)
+                    (puthash key sz-ids or-struktur--db))
 
-            (puthash `(sid ,(copy-sequence sid)) (cons id sz-id)
-                     or-struktur--db)))))
-    (puthash `(sz ,sz-id) fdb or-struktur--db)))
+                  (puthash `(sid ,(copy-sequence sid)) (cons id sz-id)
+                           or-struktur--db)))))
+          nil scope)))
+      (puthash `(sz ,sz-id) fdb or-struktur--db))))
 
 ;;; Overlay Management
 
@@ -876,7 +899,7 @@ The function FILTER-FN takes an SID and returns related nodes."
                   (< (point) end)
                   (re-search-forward org-link-any-re end t))
         (goto-char (match-beginning 0))
-        (when-let ((el (org-element-context)))
+        (when-let* ((el (org-element-context)))
           (when (eq (org-element-type el) 'link)
             (setq lnk el))))
       lnk)))
@@ -1050,6 +1073,27 @@ if such a link exists."
      (with-current-buffer buf
        (or-struktur--ov-refresh reg-beg reg-end))))
 
+(defun or-struktur-find-root-node ()
+  (save-excursion
+    (if (org-before-first-heading-p)
+        (progn
+          (goto-char (point-min))
+          (when-let* ((node (org-roam-node-at-point))
+                      (_ (member or-struktur-sz-tag (org-roam-node-tags node))))
+            node))
+      (unless (org-at-heading-p)
+        (org-back-to-heading t))
+      (let ((found nil))
+        (while (and (not found)
+                    (progn
+                      ;; Ignore inherited tags
+                      (when (member or-struktur-sz-tag (org-get-tags nil t))
+                        (setq found (point)))
+                      (unless found
+                        (org-up-heading-safe)))))
+        (when found
+          (org-roam-node-at-point))))))
+
 (defun or-struktur-view-insert-child ()
   "Insert child of current headline."
   (interactive)
@@ -1057,7 +1101,8 @@ if such a link exists."
    (let ((org-insert-heading-respect-content t))
      (org-insert-heading))
    (org-do-demote)
-   (or-struktur--db-from-strukturzettel)
+   (when-let* ((node (or-struktur-find-root-node)))
+     (or-struktur--db-from-strukturzettel node))
    (or-struktur-view--refresh-subtree
     (org-roam-node-insert))))
 
@@ -1067,7 +1112,8 @@ if such a link exists."
   (or-struktur-view--modify
    (let ((org-insert-heading-respect-content t))
      (org-insert-heading))
-   (or-struktur--db-from-strukturzettel)
+   (when-let* ((node (or-struktur-find-root-node)))
+     (or-struktur--db-from-strukturzettel node))
    (or-struktur-view--refresh-subtree
     (org-roam-node-insert))))
 
