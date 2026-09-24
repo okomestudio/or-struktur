@@ -426,12 +426,13 @@ If value is nil, returns DEFAULT."
     (with-current-buffer (find-file-noselect file)
       (org-with-wide-buffer
        (goto-char pos)
-       (let ((scope (if (org-at-heading-p) 'tree 'file)))
+       (let ((scope (if (org-at-heading-p) 'tree 'file))
+             (level-base (if (org-at-heading-p) (org-outline-level) 0)))
          (org-map-entries
           (lambda ()
             (unless (and (not inc-self) (= (point) pos))
               (let* ((elmt (org-element-at-point))
-                     (level (org-element-property :level elmt))
+                     (level (- (org-element-property :level elmt) level-base))
                      (line (line-number-at-pos (org-element-property :begin elmt) t))
                      vs)
                 (setq sid (or-struktur-sid--resize sid level))
