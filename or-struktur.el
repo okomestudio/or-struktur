@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.26.1
+;; Version: 0.26.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -1365,9 +1365,10 @@ This function returns the newly created side window."
 
 (defun or-struktur-view--display-indirect-buffer (node)
   "Display indirect buffer of NODE in view mode."
-  (let* ((name (format "%s<%s>"
+  (let* ((name (format "%s<%s::%s>"
                        or-struktur-view--buffer-name
-                       (org-roam-node-id node)))
+                       (org-roam-node-id node)
+                       (org-roam-node-title node)))
          (file (org-roam-node-file node))
          (pos (org-roam-node-point node))
          buf offset)
