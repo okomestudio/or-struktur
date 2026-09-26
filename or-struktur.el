@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.26.2
+;; Version: 0.27.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -157,6 +157,8 @@ Either nil or `minibuffer' is allowed."
 
 (defvar or-struktur-sid-text-wrapper--alist nil)
 
+(defvar or-struktur-end-string "ENDSZ")
+
 ;;; Utilities
 
 (defmacro or-struktur--debounce (delay &rest body)
@@ -211,8 +213,9 @@ Either nil or `minibuffer' is allowed."
              (entry (nth mid alist))
              (val (car entry)))
         (cond
-         ((= val key) (setq result entry) (setq left (1+ mid)))
-         ((< val key) (setq result entry) (setq left (1+ mid)))
+         ((or (equal val key) (or-struktur-sid--less val key))
+          (setq result entry
+                left (1+ mid)))
          (t (setq right (1- mid))))))
     result))
 
@@ -225,8 +228,9 @@ Either nil or `minibuffer' is allowed."
       (let* ((mid (+ left (/ (- right left) 2)))
              (elmt (nth mid lis)))
         (cond
-         ((= elmt key) (setq result mid) (setq right (1- mid)))
-         ((> elmt key) (setq result mid) (setq right (1- mid)))
+         ((not (or-struktur-sid--less elmt key))
+          (setq result mid
+                right (1- mid)))
          (t (setq left (1+ mid))))))
     result))
 
@@ -383,11 +387,10 @@ If value is nil, returns DEFAULT."
 
 (defun or-struktur--conf-from-props (props)
   "Read configurations from node properties PROPS."
-  (let ((start (string-to-number (or-struktur--prop-get props "START" "1"))))
-    (unless (and (integerp start) (> start 0))
-      (error "STRUKTUR_START must be a positive integer"))
+  (let ((start (mapcar #'string-to-number
+                       (string-split (or-struktur--prop-get props "START" "1")))))
     (when-let* ((v (or-struktur--prop-get props "TEXT_WRAPPER")))
-      (setf (alist-get start or-struktur-sid-text-wrapper--alist) v)
+      (setf (alist-get start or-struktur-sid-text-wrapper--alist nil nil #'equal) v)
       (setq or-struktur-sid-text-wrapper--alist (sort or-struktur-sid-text-wrapper--alist)))
     (let (plist box)
       (when-let* ((v (or-struktur--prop-get props "FACE_FOREGROUND"))
@@ -406,7 +409,7 @@ If value is nil, returns DEFAULT."
       (when box
         (setq plist (append plist `(:box ,box))))
       (when plist
-        (setf (alist-get start or-struktur--ov-faces) plist)
+        (setf (alist-get start or-struktur--ov-faces nil nil #'equal) plist)
         (setq or-struktur--ov-faces (sort or-struktur--ov-faces))))
     start))
 
@@ -417,9 +420,8 @@ If value is nil, returns DEFAULT."
          (pos (org-roam-node-point node))
          (inc-self nil)
          (sz-id (org-roam-node-id node))
-         (start (1- (or-struktur--conf-from-props
-                     (org-roam-node-properties node))))
-         (sid `(,start))
+         (sid (or-struktur--conf-from-props (org-roam-node-properties node)))
+         (sid-base-len (length sid))
          (fdb (make-hash-table :test #'equal)))
     (unless (and file (file-exists-p file))
       (user-error "Node file missing or invalid: %s" file))
@@ -427,18 +429,24 @@ If value is nil, returns DEFAULT."
       (org-with-wide-buffer
        (goto-char pos)
        (let ((scope (if (org-at-heading-p) 'tree 'file))
-             (level-base (if (org-at-heading-p) (org-outline-level) 0)))
+             (level-base (if (org-at-heading-p) (org-outline-level) 0))
+             (skip-rest nil)
+             vs)
          (org-map-entries
           (lambda ()
             (unless (and (not inc-self) (= (point) pos))
-              (let* ((elmt (org-element-at-point))
-                     (level (- (org-element-property :level elmt) level-base))
-                     (line (line-number-at-pos (org-element-property :begin elmt) t))
-                     vs)
+              (when-let*
+                  ((elmt (org-element-at-point))
+                   (level (+ sid-base-len (- (org-element-property :level elmt) level-base)))
+                   (line (line-number-at-pos (org-element-property :begin elmt) t)))
                 (setq sid (or-struktur-sid--resize sid level))
                 (or-struktur-sid--lsd-inc sid)
                 (when-let*
                     ((raw-title (org-element-property :title elmt))
+                     (_ (if (not (string= raw-title or-struktur-end-string))
+                            t
+                          (setq skip-rest t)
+                          nil))
                      (title-str (if (stringp raw-title)
                                     raw-title
                                   (org-element-interpret-data raw-title)))
@@ -485,12 +493,12 @@ If value is nil, returns DEFAULT."
         (let ((text-wrapper
                (if or-struktur-sid-text-wrapper
                    (or (cdr (or-struktur--alist-binary-search-floor
-                             or-struktur-sid-text-wrapper--alist (car sid)))
+                             or-struktur-sid-text-wrapper--alist sid))
                        or-struktur-sid-text-wrapper)
                  "%s"))
               (face (append '(:inherit or-struktur-overlay)
                             (cdr (or-struktur--alist-binary-search-floor
-                                  or-struktur--ov-faces (car sid))))))
+                                  or-struktur--ov-faces sid)))))
           (propertize (format text-wrapper (or-struktur-sid--render sid))
                       'face face)))
       sids)
@@ -546,8 +554,16 @@ IDs are extracted from headline properties."
 ;;; Struktur ID (SID)
 
 ;; An SID is an ID of an org-roam node assigned by its placement in a
-;; strukturzettel. The underlying data for SID is a list of integers, e.g., (2 3
-;; 5).
+;; strukturzettel. The underlying data for SID is a list of integers,
+;; e.g., (2 3 5).
+
+(defun or-struktur-sid--less (a b)
+  "Return non-nil if SID A is less than B."
+  (cond ((null a) (not (null b)))
+        ((null b) nil)
+        ((< (car a) (car b)) t)
+        ((> (car a) (car b)) nil)
+        (t (or-struktur-sid--less (cdr a) (cdr b)))))
 
 (defun or-struktur-sid--number-to-alpha (n)
   "Convert positive N to alphabet representation.
@@ -809,16 +825,6 @@ The function FILTER-FN takes an SID and returns related nodes."
                 (org-level-7 or-struktur-level-7)
                 (org-level-8 or-struktur-level-8))))
 
-(defun or-struktur-view--on-after-change-major-mode ()
-  (when (derived-mode-p 'or-struktur-view-mode)
-    (unless (buffer-narrowed-p)
-      ;; Narrow to content, hiding file properties, etc.
-      ;; (widen)
-      ;; (goto-char (point-min))
-      ;; (when (re-search-forward org-outline-regexp-bol nil t)
-      ;;   (narrow-to-region (point-at-bol) (point-max)))
-      )))
-
 (defun or-struktur-view--on-capture-before-finalize ()
   (when-let*
       ((buff (and (bound-and-true-p org-capture-plist)
@@ -868,8 +874,6 @@ The function FILTER-FN takes an SID and returns related nodes."
 
 (defun or-struktur-view--on-setup ()
   "Set up hooks for `or-struktur-view-mode'."
-  (add-hook 'after-change-major-mode-hook
-            #'or-struktur-view--on-after-change-major-mode)
   (add-hook 'org-capture-before-finalize-hook
             #'or-struktur-view--on-capture-before-finalize)
   (add-hook 'org-capture-after-finalize-hook
@@ -1380,16 +1384,22 @@ This function returns the newly created side window."
           (or-struktur-view-mode))
 
         (goto-char pos)
-        (pcase-let* ((`(,beg . ,end)
-                      (if (org-at-heading-p)
-                          (let* ((elem (org-element-at-point))
-                                 (end (org-element-property :end elem))
-                                 (beg (save-excursion
-                                        (org-next-visible-heading 1)
-                                        (point))))
-                            (cons beg end))
-                        (org-next-visible-heading 1)
-                        (cons (point) (point-max)))))
+        (pcase-let*
+            ((`(,beg . ,end)
+              (if (org-at-heading-p)
+                  (let* ((elem (org-element-at-point))
+                         (end (org-element-property :end elem))
+                         (beg (save-excursion
+                                (org-next-visible-heading 1)
+                                (point))))
+                    (cons beg end))
+                (let ((re (concat "^\\*+[ \t]+" or-struktur-end-string "[ \t]*$")))
+                  (org-next-visible-heading 1)
+                  (cons (point)
+                        (save-excursion
+                          (if (re-search-forward re nil t)
+                              (match-beginning 0)
+                            (point-max))))))))
           (narrow-to-region beg end))
 
         (setq header-line-format
