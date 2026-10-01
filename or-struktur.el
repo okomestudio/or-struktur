@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.28.1
+;; Version: 0.28.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -804,10 +804,10 @@ The function FILTER-FN takes an SID and returns related nodes."
   :group 'org-roam
   ;; Load directory local variables, as indirect buffers do not load
   ;; them by default.
-  ;; (when-let*
-  ;;     ((base (buffer-base-buffer))
-  ;;      (default-directory (buffer-local-value 'default-directory base)))
-  ;;   (hack-dir-local-variables-non-file-buffer))
+  (when-let*
+      ((base (buffer-base-buffer))
+       (default-directory (buffer-local-value 'default-directory base)))
+    (hack-dir-local-variables-non-file-buffer))
 
   (read-only-mode 1)
 
@@ -1238,7 +1238,7 @@ delay (`or-struktur-view-save-timer-delay')."
 (defun or-struktur-view-edit-link-desc ()
   "Edit link description."
   (interactive)
-  (or-struktur-view--modify
+  (or-struktur-view--modify-subtree
    (when-let*
        ((lnk (or-struktur-view--link))
         (type (org-element-property :type lnk))
