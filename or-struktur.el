@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.28.2
+;; Version: 0.28.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -853,14 +853,19 @@ The function FILTER-FN takes an SID and returns related nodes."
 (defun or-struktur-view--on-capture-after-finalize ()
   (when-let* ((buf (current-buffer))
               (_ (string-prefix-p or-struktur-view--buffer-name (buffer-name buf)))
+              (r-beg (save-excursion (beginning-of-line) (point)))
+              (r-end (save-excursion (end-of-line) (point)))
               (base-buf (buffer-base-buffer)))
-    (if org-note-abort
-        (revert-buffer nil t t)
-      (when (buffer-modified-p)
-        (or-struktur-view--schedule-save buf or-struktur-view-save-timer-delay)))
     (with-current-buffer buf
+      (if org-note-abort
+          (revert-buffer nil t t)
+        (when (buffer-modified-p)
+          (or-struktur-view--schedule-save buf or-struktur-view-save-timer-delay)))
       (read-only-mode 1)
-      (beginning-of-line))))
+      (goto-char r-beg))
+    (with-current-buffer base-buf
+      (font-lock-flush r-beg r-end)
+      (font-lock-ensure r-beg r-end))))
 
 (defun or-struktur-view--link ()
   "Return first Org link element on current line or nil if it does not exist."
@@ -1152,37 +1157,47 @@ delay (`or-struktur-view-save-timer-delay')."
                    (or-struktur--ov-refresh r-beg r-end))))
            (read-only-mode +1)
            (set-marker head-marker nil))))
-     ;; Do not save buffer if a capture is in session, in which case
-     ;; save-or-revert is handled in the capture's after-finalize hook.
-     ;; (unless (or-struktur-view--capture-active-p)
-     ;;   (or-struktur-view--schedule-save buf or-struktur-view-save-timer-delay))
      (if inhibit-save
          (when or-struktur-view--save-timer
            (cancel-timer or-struktur-view--save-timer))
        (or-struktur-view--schedule-save buf or-struktur-view-save-timer-delay))))
 
+(defmacro or-struktur-view-insert- (&rest body)
+  `(or-struktur-view--modify-subtree
+    (let ((org-insert-heading-respect-content t)
+          insert-action)
+      (cl-flet ((on-post-insert (&rest _) (setq insert-action 'existing))
+                (on-new-node (&rest _) (setq insert-action 'capture)))
+        (add-hook 'org-roam-post-node-insert-hook #'on-post-insert)
+        (add-hook 'org-roam-capture-new-node-hook #'on-new-node)
+        (unwind-protect
+            (progn
+              (progn ,@body)
+              (call-interactively #'org-roam-node-insert)
+              (setq head-marker (copy-marker (point)))
+              (cond
+               ((eq insert-action 'existing)
+                (setq inhibit-save nil)
+                (beginning-of-line))
+               ((or (eq insert-action 'capture)
+                    (bound-and-true-p org-capture-mode)
+                    (and (boundp 'org-capture-plist) org-capture-plist))
+                (setq inhibit-save t))))
+          (remove-hook 'org-roam-capture-new-node-hook #'on-new-node)
+          (remove-hook 'org-roam-post-node-insert-hook #'on-post-insert))))))
+
 (defun or-struktur-view-insert-child ()
   "Insert child of current headline."
   (interactive)
-  (or-struktur-view--modify-subtree
-   (let ((org-insert-heading-respect-content t))
-     (org-insert-heading)
-     (org-do-demote)
-     (call-interactively #'org-roam-node-insert)
-     (beginning-of-line)
-     (setq head-marker (copy-marker (point))
-           inhibit-save t))))
+  (or-struktur-view-insert-
+   (org-insert-heading)
+   (org-do-demote)))
 
 (defun or-struktur-view-insert-sibling ()
   "Insert sibling of current headline."
   (interactive)
-  (or-struktur-view--modify-subtree
-   (let ((org-insert-heading-respect-content t))
-     (org-insert-heading)
-     (call-interactively #'org-roam-node-insert)
-     (beginning-of-line)
-     (setq head-marker (copy-marker (point))
-           inhibit-save t))))
+  (or-struktur-view-insert-
+   (org-insert-heading)))
 
 (defun or-struktur-view-do-headline-demote ()
   "Demote current headline."
