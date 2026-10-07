@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.28.3
+;; Version: 0.28.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -840,6 +840,27 @@ The function FILTER-FN takes an SID and returns related nodes."
   (add-hook 'org-capture-after-finalize-hook #'or-struktur-view--on-capture-after-finalize))
 
 (add-hook 'or-struktur-view-mode-hook #'or-struktur-view--on-init)
+
+(defun or-struktur-view-cycle-global (fun &rest _args)
+  (cond
+   ((derived-mode-p 'or-struktur-view-mode)
+    ;; Follows `org-cycle-internal-global', but limits cycling to
+    ;; overview and contents:
+    (cond
+     ((and (eq last-command this-command)
+	   (eq org-cycle-global-status 'overview))
+      (run-hook-with-args 'org-cycle-pre-hook 'contents)
+      (org-cycle-content)
+      (setq org-cycle-global-status 'contents)
+      (run-hook-with-args 'org-cycle-hook 'contents))
+     (t
+      (run-hook-with-args 'org-cycle-pre-hook 'overview)
+      (org-cycle-overview)
+      (setq org-cycle-global-status 'overview)
+      (run-hook-with-args 'org-cycle-hook 'overview))))
+   (t (apply fun _args))))
+
+(advice-add #'org-cycle-global :around #'or-struktur-view-cycle-global)
 
 (defun or-struktur-view--on-capture-before-finalize ()
   (when-let*
