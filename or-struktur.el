@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.28.4
+;; Version: 0.29.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1"))
 ;;
@@ -163,7 +163,7 @@ Either nil or `minibuffer' is allowed."
 
 (defvar or-struktur-sid-text-wrapper--alist nil)
 
-(defvar or-struktur-end-string "ENDSZ")
+(defvar or-struktur-skipped-headline nil)
 
 ;;; Utilities
 
@@ -418,7 +418,17 @@ If value is nil, returns DEFAULT."
         (setq or-struktur--ov-faces (sort or-struktur--ov-faces))))
     start))
 
-;; TODO(2026-02-05): Improve by performing update on affected tree.
+(defun or-struktur--headline-skip-p (&optional element)
+  "Return non-nil if headeline ELEMENT matches a skip condition."
+  (when-let* ((elmt (or element (org-element-at-point))))
+    (cond
+     ((functionp or-struktur-skipped-headline)
+      (funcall or-struktur-skipped-headline elmt))
+     ((stringp or-struktur-skipped-headline)
+      (save-match-data
+        (string-match or-struktur-skipped-headline
+                      (org-element-property :raw-value elmt)))))))
+
 (defun or-struktur--db-from-strukturzettel (node)
   "Update storage mapping from the strukturzettel at NODE."
   (let* ((file (org-roam-node-file node))
@@ -435,7 +445,7 @@ If value is nil, returns DEFAULT."
        (goto-char pos)
        (let ((scope (if (org-at-heading-p) 'tree 'file))
              (level-base (if (org-at-heading-p) (org-outline-level) 0))
-             (skip-rest nil)
+             (skip-subtree-level nil)
              vs)
          (org-map-entries
           (lambda ()
@@ -446,12 +456,14 @@ If value is nil, returns DEFAULT."
                    (line (line-number-at-pos (org-element-property :begin elmt) t)))
                 (setq sid (or-struktur-sid--resize sid level))
                 (or-struktur-sid--lsd-inc sid)
+
                 (when-let*
                     ((raw-title (org-element-property :title elmt))
-                     (_ (if (not (string= raw-title or-struktur-end-string))
-                            t
-                          (setq skip-rest t)
-                          nil))
+                     (_ (if (and skip-subtree-level (> level skip-subtree-level))
+                            nil
+                          (not (setq skip-subtree-level
+                                     (and (or-struktur--headline-skip-p elmt)
+                                          level)))))
                      (title-str (if (stringp raw-title)
                                     raw-title
                                   (org-element-interpret-data raw-title)))
@@ -836,10 +848,41 @@ The function FILTER-FN takes an SID and returns related nodes."
   (setq-local org-use-speed-commands nil)
   (text-scale-set -0.6)
 
+  (or-struktur--hide-skipped-headlines)
+
   (add-hook 'org-capture-before-finalize-hook #'or-struktur-view--on-capture-before-finalize)
   (add-hook 'org-capture-after-finalize-hook #'or-struktur-view--on-capture-after-finalize))
 
 (add-hook 'or-struktur-view-mode-hook #'or-struktur-view--on-init)
+
+(defvar-local or-struktur--hidden-subtree-spec 'or-struktur-hidden-subtree
+  "Invisibility spec for skipped subtrees.")
+
+(defun or-struktur--hide-skipped-headlines ()
+  (org-map-entries
+   (lambda ()
+     (when (or-struktur--headline-skip-p)
+       (save-excursion
+         (org-back-to-heading t)
+         (message "Not a strukturzettel headline: %s"
+                  (org-element-property :raw-value (org-element-at-point)))
+         (add-to-invisibility-spec or-struktur--hidden-subtree-spec)
+         (let* ((beg (max (point-min) (1- (line-beginning-position))))
+                (end (save-excursion
+                       (org-end-of-subtree t t)
+                       (point))))
+           (let ((ov (make-overlay beg end)))
+             (overlay-put ov 'invisible or-struktur--hidden-subtree-spec)
+             (overlay-put ov 'category 'or-struktur-hidden-subtree-ov)
+             (overlay-put ov 'priority 100)
+
+             ;; To allow isearch/occur to reveal the hidden region, use
+             ;; the following:
+             ;; (overlay-put ov 'isearch-open-invisible
+             ;;              (lambda (ov) (delete-overlay ov)))
+
+             (overlay-put ov 'line-prefix "")
+             (overlay-put ov 'wrap-prefix ""))))))))
 
 (defun or-struktur-view-cycle-global (fun &rest _args)
   (cond
@@ -861,6 +904,60 @@ The function FILTER-FN takes an SID and returns related nodes."
    (t (apply fun _args))))
 
 (advice-add #'org-cycle-global :around #'or-struktur-view-cycle-global)
+
+(defun or-struktur-headline-has-children-p ()
+  "Return non-nil if the headline at point has direct child sub-headlines."
+  (save-excursion
+    (org-back-to-heading t)
+    (org-goto-first-child)))
+
+(defun or-struktur-headline-has-body-p ()
+  "Return non-nil if headline at point has non-whitespace body text."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((b-beg (save-excursion (org-end-of-meta-data t) (point)))
+          (b-end (save-excursion
+                   (if (re-search-forward org-outline-regexp-bol nil t)
+                       (match-beginning 0)
+                     (point-max)))))
+      (and (< b-beg b-end)
+           (string-match-p "[^ \t\n\r]"
+                           (buffer-substring-no-properties b-beg b-end))))))
+
+(defun or-struktur-headline-fold-state ()
+  "Return the fold state for the headline at point.
+Returns one of:
+  'empty      - No body and no child headlines exist
+  'folded     - Entire subtree (or body) is hidden
+  'children   - Body text is hidden, but child subheadlines are visible
+  'expanded   - Everything in the entry is visible"
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((has-child (or-struktur-headline-has-children-p))
+          (has-body (or-struktur-headline-has-body-p)))
+      (cond
+       ((and (not has-child) (not has-body))
+        'empty)
+       ((not (org-fold-folded-p (line-end-position)))
+        'expanded)
+       (has-child
+        (let ((child-pos (save-excursion (org-goto-first-child) (point))))
+          (if (org-fold-folded-p child-pos)
+              'folded    ; child headline itself is inside the fold
+            'children))) ; body is folded, but child headline is visible
+       (t 'folded)))))
+
+(defun or-struktur-view-cycle ()
+  (when (derived-mode-p 'or-struktur-view-mode)
+    (when (and (org-at-heading-p) (bolp))
+      (save-excursion
+        (org-back-to-heading t)
+        (if (not (member (or-struktur-headline-fold-state) '(children expanded)))
+            (org-fold-show-branches)
+          (org-fold-subtree t)))
+      t)))
+
+(add-hook 'org-tab-first-hook #'or-struktur-view-cycle)
 
 (defun or-struktur-view--on-capture-before-finalize ()
   (when-let*
@@ -1466,13 +1563,8 @@ This function returns the newly created side window."
                                 (org-next-visible-heading 1)
                                 (point))))
                     (cons beg end))
-                (let ((re (concat "^\\*+[ \t]+" or-struktur-end-string "[ \t]*$")))
-                  (org-next-visible-heading 1)
-                  (cons (point)
-                        (save-excursion
-                          (if (re-search-forward re nil t)
-                              (match-beginning 0)
-                            (point-max))))))))
+                (org-next-visible-heading 1)
+                (cons (point) (point-max)))))
           (narrow-to-region beg end)
           (or-struktur-view-mode)
           (font-lock-fontify-buffer)) ; `font-lock-flush'?ormat
