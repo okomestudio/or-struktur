@@ -4,9 +4,9 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.29.1
+;; Version: 0.29.2
 ;; Keywords: org-roam, convenience
-;; Package-Requires: ((emacs "30.1"))
+;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
 ;;; License:
 ;;
