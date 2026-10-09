@@ -1,10 +1,10 @@
-;;; or-struktur.el --- Structure Notes for Org Roam  -*- lexical-binding: t -*-
+;;; or-struktur.el --- Zettelkasten Structure Notes for Org Roam  -*- lexical-binding: t -*-
 ;;
 ;; Copyright (C) 2026 Taro Sato
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.29.2
+;; Version: 0.30.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -25,8 +25,11 @@
 ;;
 ;;; Commentary:
 ;;
-;; This Org Roam plugin provides support for structure notes
-;; (strukturzettel in German).
+;; This Org Roam extension provides support for Zettelkasten structure
+;; notes (strukturzettel in German).
+;;
+;; Since the term strukturzettel is rather long, its abbreviated form SZ
+;; is used throughout the package.
 ;;
 ;;; Code:
 
@@ -45,24 +48,24 @@
   :group 'or-struktur)
 
 (defcustom or-struktur-sz-tag "sz"
-  "Tag for `org-roam' nodes indicating strukturzettels."
+  "Tag indicating SZ nodes."
   :type 'string
   :group 'or-struktur)
 
-(defcustom or-struktur-sid-text-placement 'before-string
-  "Specify side of overlay to show rendered SID."
+(defcustom or-struktur-fid-text-placement 'before-string
+  "Specify side of overlay to show rendered FID."
   :type '(choice before-string after-string)
   :group 'or-struktur)
 
-(defcustom or-struktur-sid-text-wrapper "[%s]"
-  "String wrapper used for text representation of SID.
-When set to nil, text wrapping is disabled for all SIDs, regardless of
-per-strukturzettel settings."
+(defcustom or-struktur-fid-text-wrapper "[%s]"
+  "String wrapper used for text representation of FID.
+When set to nil, text wrapping is disabled for all FIDs, regardless of
+per-SZ settings."
   :type 'string
   :group 'or-struktur)
 
-(defcustom or-struktur-sid-text-format '("%d" ".%d")
-  "String format for SID representation.
+(defcustom or-struktur-fid-text-format '("%d" ".%d")
+  "String format for FID representation.
 Allowed formatters are '%d' (numeric) and '%s' (alphabetic). When extended,
 alphanumeric components are alternated.
 
@@ -150,18 +153,15 @@ Either nil or `minibuffer' is allowed."
        :underline nil
        :foreground ,(face-attribute 'shadow :foreground)
        :background ,(face-attribute 'shadow :background)))
-  "Face used for SID overlays."
+  "Face used for FID overlays."
   :group 'or-struktur)
 
 (defconst or-struktur-view--buffer-name " strukturzettel buffer"
-  "Name of indirect buffer visiting strukturzettel file.")
-
-(defvar or-struktur--db (make-hash-table :test #'equal)
-  "Mapping storage.")
+  "Name of indirect buffer visiting a SZ file.")
 
 (defvar or-struktur--ov-faces nil)
 
-(defvar or-struktur-sid-text-wrapper--alist nil)
+(defvar or-struktur-fid-text-wrapper--alist nil)
 
 (defvar or-struktur-skipped-headline nil)
 
@@ -219,7 +219,7 @@ Either nil or `minibuffer' is allowed."
              (entry (nth mid alist))
              (val (car entry)))
         (cond
-         ((or (equal val key) (or-struktur-sid--less val key))
+         ((or (equal val key) (or-struktur-fid--less val key))
           (setq result entry
                 left (1+ mid)))
          (t (setq right (1- mid))))))
@@ -234,11 +234,114 @@ Either nil or `minibuffer' is allowed."
       (let* ((mid (+ left (/ (- right left) 2)))
              (elmt (nth mid lis)))
         (cond
-         ((not (or-struktur-sid--less elmt key))
+         ((not (or-struktur-fid--less elmt key))
           (setq result mid
                 right (1- mid)))
          (t (setq left (1+ mid))))))
     result))
+
+;;; Node ID-FID Mapping Storage
+
+;; NOTE: The storage implementation uses a hash table. For scalability,
+;; consider using a relational database, e.g., SQLite (?).
+
+(defvar or-struktur--db (make-hash-table :test #'equal)
+  "Node ID-FID Mapping storage.
+This compound hashtable stores the mapping between node IDs and FIDs to
+speed up lookup. There are three types of mapping stored:
+
+  A. (sz sz-id) -> node-id -> (fid . line-no)
+  B. (id node-id) -> sz-ids
+  C. (fid fid) -> (node-id . sz-id)")
+
+(defun or-struktur--db-empty-p ()
+  "Return non-nil if the mapping storage is empty."
+  (= (hash-table-count or-struktur--db) 0))
+
+(defun or-struktur--db-clear ()
+  "Empty the mapping storage."
+  (clrhash or-struktur--db))
+
+(defun or-struktur--db-fid2id-get (fid)
+  "Get node ID for FID from the mapping storage."
+  (when-let* ((v (gethash `(fid ,fid) or-struktur--db)))
+    (car v)))
+
+(defun or-struktur--db-id2fid-get (node-id &optional extra)
+  "Get all FIDs associated with NODE-ID from the mapping storage.
+When EXTRA is non-nil, return also SZ ID and its buffer line number."
+  (apply #'append
+         (seq-keep
+          (lambda (sz-id)
+            (when-let* ((db (gethash `(sz ,sz-id) or-struktur--db)))
+              (mapcar (lambda (item)
+                        (pcase-let* ((`(,fid . ,line-no) item))
+                          (if extra `(,fid ,sz-id ,line-no) fid)))
+                      (gethash node-id db))))
+          (gethash `(id ,node-id) or-struktur--db))))
+
+(defun or-struktur--db-init ()
+  "Fill the mapping storage from all known SZ nodes."
+  (or-struktur--db-clear)
+  (dolist (node (or-struktur-sz-nodes))
+    (or-struktur--db-from-sz node)))
+
+(defun or-struktur--db-init-maybe ()
+  "If the mapping storage is empty, initialize it."
+  (when (or-struktur--db-empty-p)
+    (or-struktur--db-init)))
+
+(defun or-struktur--db-from-sz (node)
+  "Update the storage mapping from the SZ NODE."
+  (let* ((file (org-roam-node-file node))
+         (pos (org-roam-node-point node))
+         (sz-id (org-roam-node-id node))
+         (fid (or-struktur--conf-from-props (org-roam-node-properties node)))
+         (fid-base-len (length fid))
+         (fdb (make-hash-table :test #'equal)))
+    (unless (and file (file-exists-p file))
+      (user-error "Node file missing or invalid: %s" file))
+    (with-current-buffer (find-file-noselect file)
+      (org-with-wide-buffer
+       (goto-char pos)
+       (let ((scope (if (org-at-heading-p) 'tree 'file))
+             (level-base (if (org-at-heading-p) (org-outline-level) 0))
+             skip-subtree-level)
+         (org-map-entries
+          (lambda ()
+            (when-let*
+                ((_ (not (= (point) pos)))
+                 (elmt (org-element-at-point))
+                 (level (+ fid-base-len (- (org-element-property :level elmt) level-base)))
+                 (line-no (line-number-at-pos (org-element-property :begin elmt) t)))
+              (setq fid (or-struktur-fid--resize fid level))
+              (or-struktur-fid--lsd-inc fid)
+
+              (when-let*
+                  ((raw-title (org-element-property :title elmt))
+                   (_ (if (and skip-subtree-level (> level skip-subtree-level))
+                          nil
+                        (not (setq skip-subtree-level
+                                   (and (or-struktur--headline-skip-p elmt)
+                                        level)))))
+                   (title-str (if (stringp raw-title)
+                                  raw-title
+                                (org-element-interpret-data raw-title)))
+                   (parsed-title (org-element-parse-secondary-string
+                                  title-str (org-element-restriction 'headline)))
+                   (lnk (org-element-map parsed-title 'link #'identity nil 'first-match))
+                   (id (and (equal (org-element-property :type lnk) "id")
+                            (org-element-property :path lnk))))
+                (let* ((vals (gethash id fdb))
+                       (key `(id ,id))
+                       (sz-ids (gethash key or-struktur--db)))
+                  (push (cons (copy-sequence fid) line-no) vals)
+                  (puthash id vals fdb)
+                  (cl-pushnew sz-id sz-ids :test #'equal)
+                  (puthash key sz-ids or-struktur--db))
+                (puthash `(fid ,(copy-sequence fid)) (cons id sz-id) or-struktur--db))))
+          nil scope)))
+      (puthash `(sz ,sz-id) fdb or-struktur--db))))
 
 ;;;
 ;;; Minor Mode (or-struktur-mode)
@@ -308,7 +411,7 @@ Either nil or `minibuffer' is allowed."
   ;; NOTE: Even when the save is performed in an indirect buffer, the
   ;; hook runs on their base buffers.
   (mapcar (lambda (node)
-            (or-struktur--db-from-strukturzettel node))
+            (or-struktur--db-from-sz node))
           (let (nodes)
             (org-with-wide-buffer
              (goto-char (point-min))
@@ -338,52 +441,6 @@ Either nil or `minibuffer' is allowed."
       (let ((buf (current-buffer)))
         (or-struktur--ov-refresh beg end buf)))))
 
-;;; Mapping Storage for ID-SID Relations
-
-;; NOTE: The storage implementation uses a hash table. For scalability, perhaps
-;; consider using a relational database, e.g., SQLite.
-
-(defun or-struktur--db-empty-p ()
-  "Return non-nil if mapping storage is empty."
-  (= (hash-table-count or-struktur--db) 0))
-
-(defun or-struktur--db-clear ()
-  "Empty mapping storage."
-  (clrhash or-struktur--db))
-
-(defun or-struktur--db-sid2id-get (sid)
-  "Get ID for SID from mapping storage."
-  (when-let* ((v (gethash `(sid ,sid) or-struktur--db)))
-    (car v)))
-
-(defun or-struktur--db-id2sid-get (id &optional extra)
-  "Get all SIDs associated with ID from mapping storage.
-When EXTRA is non-nil, return also strukturzettel ID and the position of SID
-entry."
-  (apply #'append
-         (seq-keep
-          (lambda (sz-id)
-            (when-let*
-                ((db (gethash `(sz ,sz-id)
-                              or-struktur--db)))
-              (mapcar
-               (lambda (item)
-                 (pcase-let* ((`(,sid . ,line) item))
-                   (if extra `(,sid ,sz-id ,line) sid)))
-               (gethash id db))))
-          (gethash `(id ,id) or-struktur--db))))
-
-(defun or-struktur--db-init ()
-  "Fill mapping storage from all known strukturzettels."
-  (or-struktur--db-clear)
-  (dolist (node (or-struktur-sz-list))
-    (or-struktur--db-from-strukturzettel node)))
-
-(defun or-struktur--db-init-maybe ()
-  "If mapping storage is empty, initialize."
-  (when (or-struktur--db-empty-p)
-    (or-struktur--db-init)))
-
 (defun or-struktur--prop-get (props key &optional default)
   "Get value for KEY in node PROPS.
 If value is nil, returns DEFAULT."
@@ -395,8 +452,8 @@ If value is nil, returns DEFAULT."
   (let ((start (mapcar #'string-to-number
                        (string-split (or-struktur--prop-get props "START" "1")))))
     (when-let* ((v (or-struktur--prop-get props "TEXT_WRAPPER")))
-      (setf (alist-get start or-struktur-sid-text-wrapper--alist nil nil #'equal) v)
-      (setq or-struktur-sid-text-wrapper--alist (sort or-struktur-sid-text-wrapper--alist)))
+      (setf (alist-get start or-struktur-fid-text-wrapper--alist nil nil #'equal) v)
+      (setq or-struktur-fid-text-wrapper--alist (sort or-struktur-fid-text-wrapper--alist)))
     (let (plist box)
       (when-let* ((v (or-struktur--prop-get props "FACE_FOREGROUND"))
                   (v (if (string= v "nil") nil v)))
@@ -429,64 +486,7 @@ If value is nil, returns DEFAULT."
         (string-match or-struktur-skipped-headline
                       (org-element-property :raw-value elmt)))))))
 
-(defun or-struktur--db-from-strukturzettel (node)
-  "Update storage mapping from the strukturzettel at NODE."
-  (let* ((file (org-roam-node-file node))
-         (pos (org-roam-node-point node))
-         (inc-self nil)
-         (sz-id (org-roam-node-id node))
-         (sid (or-struktur--conf-from-props (org-roam-node-properties node)))
-         (sid-base-len (length sid))
-         (fdb (make-hash-table :test #'equal)))
-    (unless (and file (file-exists-p file))
-      (user-error "Node file missing or invalid: %s" file))
-    (with-current-buffer (find-file-noselect file)
-      (org-with-wide-buffer
-       (goto-char pos)
-       (let ((scope (if (org-at-heading-p) 'tree 'file))
-             (level-base (if (org-at-heading-p) (org-outline-level) 0))
-             (skip-subtree-level nil)
-             vs)
-         (org-map-entries
-          (lambda ()
-            (unless (and (not inc-self) (= (point) pos))
-              (when-let*
-                  ((elmt (org-element-at-point))
-                   (level (+ sid-base-len (- (org-element-property :level elmt) level-base)))
-                   (line (line-number-at-pos (org-element-property :begin elmt) t)))
-                (setq sid (or-struktur-sid--resize sid level))
-                (or-struktur-sid--lsd-inc sid)
-
-                (when-let*
-                    ((raw-title (org-element-property :title elmt))
-                     (_ (if (and skip-subtree-level (> level skip-subtree-level))
-                            nil
-                          (not (setq skip-subtree-level
-                                     (and (or-struktur--headline-skip-p elmt)
-                                          level)))))
-                     (title-str (if (stringp raw-title)
-                                    raw-title
-                                  (org-element-interpret-data raw-title)))
-                     (parsed-title (org-element-parse-secondary-string
-                                    title-str (org-element-restriction 'headline)))
-                     (lnk (org-element-map parsed-title 'link #'identity nil 'first-match))
-                     (id (and (equal (org-element-property :type lnk) "id")
-                              (org-element-property :path lnk))))
-                  (setq vs (gethash id fdb))
-                  (push (cons (copy-sequence sid) line) vs)
-                  (puthash id vs fdb)
-
-                  (let* ((key `(id ,id))
-                         (sz-ids (gethash key or-struktur--db)))
-                    (cl-pushnew sz-id sz-ids :test #'equal)
-                    (puthash key sz-ids or-struktur--db))
-
-                  (puthash `(sid ,(copy-sequence sid)) (cons id sz-id)
-                           or-struktur--db)))))
-          nil scope)))
-      (puthash `(sz ,sz-id) fdb or-struktur--db))))
-
-;;; Overlay Management
+;;; FID Overlays
 
 (defun or-struktur--ov-put (beg end text)
   "Add TEXT overlay for content from BEG to END."
@@ -494,35 +494,35 @@ If value is nil, returns DEFAULT."
          (space (propertize " "
                             'face '( :inherit or-struktur-overlay
                                      :height 0.25 )))
-         (text (pcase or-struktur-sid-text-placement
+         (text (pcase or-struktur-fid-text-placement
                  ('before-string (concat text space))
                  ('after-string (concat space text)))))
-    (overlay-put ov or-struktur-sid-text-placement text)
+    (overlay-put ov or-struktur-fid-text-placement text)
     (overlay-put ov 'category 'or-struktur)
     (overlay-put ov 'evaporate t)))
 
 (defun or-struktur--ov-format (id)
-  "Render SIDs for ID as string for overlay."
-  (when-let* ((sids (or-struktur--db-id2sid-get id)))
+  "Render FIDs for node ID as string for overlay."
+  (when-let* ((fids (or-struktur--db-id2fid-get id)))
     (string-join
      (mapcar
-      (lambda (sid)
+      (lambda (fid)
         (let ((text-wrapper
-               (if or-struktur-sid-text-wrapper
+               (if or-struktur-fid-text-wrapper
                    (or (cdr (or-struktur--alist-binary-search-floor
-                             or-struktur-sid-text-wrapper--alist sid))
-                       or-struktur-sid-text-wrapper)
+                             or-struktur-fid-text-wrapper--alist fid))
+                       or-struktur-fid-text-wrapper)
                  "%s"))
               (face (append '(:inherit or-struktur-overlay)
                             (cdr (or-struktur--alist-binary-search-floor
-                                  or-struktur--ov-faces sid)))))
-          (propertize (format text-wrapper (or-struktur-sid--render sid))
+                                  or-struktur--ov-faces fid)))))
+          (propertize (format text-wrapper (or-struktur-fid--render fid))
                       'face face)))
-      sids)
+      fids)
      (string ?\u200B))))
 
 (defun or-struktur--ov-render-in-title ()
-  "Render SID overlays in document title.
+  "Render FID overlays in document title.
 The title is obtained from `#+title:'."
   (goto-char (point-min))     ; this respects narrowing
   (when-let* ((node (org-roam-node-at-point))
@@ -531,7 +531,7 @@ The title is obtained from `#+title:'."
       (or-struktur--ov-put (match-beginning 1) (match-end 1) s))))
 
 (defun or-struktur--ov-render-in-headlines ()
-  "Render SID overlays in headlines.
+  "Render FID overlays in headlines.
 IDs are extracted from headline properties."
   (org-element-map (org-element-parse-buffer) 'headline
     (lambda (elmt)
@@ -542,7 +542,7 @@ IDs are extracted from headline properties."
         (or-struktur--ov-put beg end s)))))
 
 (defun or-struktur--ov-render-link (elmt)
-  "Render SID overlay for link ELMT."
+  "Render FID overlay for link ELMT."
   (when-let* ((id (and (string= (org-element-property :type elmt) "id")
                        (org-element-property :path elmt)))
               (s (or-struktur--ov-format id))
@@ -551,12 +551,12 @@ IDs are extracted from headline properties."
     (or-struktur--ov-put beg end s)))
 
 (defun or-struktur--ov-remove (&optional beg end buffer)
-  "Remove SID overlays in BUFFER region from BEG to END."
+  "Remove FID overlays in BUFFER region from BEG to END."
   (or-struktur--narrow-and-eval beg end buffer
     (remove-overlays beg end 'category 'or-struktur)))
 
 (defun or-struktur--ov-render (&optional beg end buffer)
-  "Render SID overlays in BUFFER region from BEG to END."
+  "Render FID overlays in BUFFER region from BEG to END."
   (or-struktur--narrow-and-eval beg end buffer
     (or-struktur--ov-render-in-title)
     (or-struktur--ov-render-in-headlines)
@@ -564,25 +564,25 @@ IDs are extracted from headline properties."
       #'or-struktur--ov-render-link)))
 
 (defun or-struktur--ov-refresh (&optional beg end buffer)
-  "Refresh SID overlays in BUFFER region from BEG to END."
+  "Refresh FID overlays in BUFFER region from BEG to END."
   (or-struktur--ov-remove beg end buffer)
   (or-struktur--ov-render beg end buffer))
 
-;;; Struktur ID (SID)
+;;; FID (Folgezettel-like ID)
 
-;; An SID is an ID of an org-roam node assigned by its placement in a
-;; strukturzettel. The underlying data for SID is a list of integers,
+;; An FID is an ID of an org-roam node assigned by its placement in a
+;; strukturzettel. The underlying data for FID is a list of integers,
 ;; e.g., (2 3 5).
 
-(defun or-struktur-sid--less (a b)
-  "Return non-nil if SID A is less than B."
+(defun or-struktur-fid--less (a b)
+  "Return non-nil if FID A is less than B."
   (cond ((null a) (not (null b)))
         ((null b) nil)
         ((< (car a) (car b)) t)
         ((> (car a) (car b)) nil)
-        (t (or-struktur-sid--less (cdr a) (cdr b)))))
+        (t (or-struktur-fid--less (cdr a) (cdr b)))))
 
-(defun or-struktur-sid--number-to-alpha (n)
+(defun or-struktur-fid--number-to-alpha (n)
   "Convert positive N to alphabet representation.
 The return value is a string or nil if N is not a positive integer."
   (unless (and (integerp n) (> n 0))
@@ -597,73 +597,73 @@ The return value is a string or nil if N is not a positive integer."
         (setq num (/ adjusted 26))))
     result))
 
-(defun or-struktur-sid--render (sid)
-  "Render SID using preset format.
-The preset format is set with `or-struktur-sid-text-format'."
+(defun or-struktur-fid--render (fid)
+  "Render FID using preset format.
+The preset format is set with `or-struktur-fid-text-format'."
   (string-join
    (cl-loop with (converter) = '(nil)
-            for i below (length sid)
+            for i below (length fid)
             collect
-            (let ((fmt (or (nth i or-struktur-sid-text-format)
+            (let ((fmt (or (nth i or-struktur-fid-text-format)
                            (if (eq converter #'identity) "%s" "%d"))))
               (setq converter (or (and (string-search "%d" fmt) #'identity)
-                                  #'or-struktur-sid--number-to-alpha))
-              (format fmt (funcall converter (nth i sid)))))))
+                                  #'or-struktur-fid--number-to-alpha))
+              (format fmt (funcall converter (nth i fid)))))))
 
-(defun or-struktur-sid--resize (sid n &optional initval)
-  "Resize SID to N digits.
+(defun or-struktur-fid--resize (fid n &optional initval)
+  "Resize FID to N digits.
 If given, fill new digit(s) with INITVAL (defaults to zero)."
   (let ((initval (or initval 0))
-        (m (length sid)))
-    (cond ((< n m) (seq-take sid n))
-          ((< m n) (append sid (make-list (- n m) initval)))
-          (t sid))))
+        (m (length fid)))
+    (cond ((< n m) (seq-take fid n))
+          ((< m n) (append fid (make-list (- n m) initval)))
+          (t fid))))
 
-(defun or-struktur-sid--lsd-inc (sid)
-  "Increment least-significant digit of SID."
-  (let ((lsd (1- (length sid))))
-    (setcar (nthcdr lsd sid) (1+ (nth lsd sid)))))
+(defun or-struktur-fid--lsd-inc (fid)
+  "Increment least-significant digit of FID."
+  (let ((lsd (1- (length fid))))
+    (setcar (nthcdr lsd fid) (1+ (nth lsd fid)))))
 
-(defun or-struktur-sid--from-id (&optional id extra)
-  "Get SIDs for node ID.
+(defun or-struktur-fid--from-id (&optional id extra)
+  "Get FIDs for node ID.
 If not given, ID defaults to that of current node.
 
-See `or-struktur--mapping-id2fz-get' for EXTRA."
-  (or-struktur--db-id2sid-get (or id (org-roam-id-at-point)) extra))
+See `or-struktur--mapping-id2fid-get' for the meaning of EXTRA."
+  (or-struktur--db-id2fid-get (or id (org-roam-id-at-point)) extra))
 
-(defun or-struktur-sid--to-id (sid)
-  "Get node ID for SID."
-  (or-struktur--db-sid2id-get sid))
+(defun or-struktur-fid--to-id (fid)
+  "Get node ID for FID."
+  (or-struktur--db-fid2id-get fid))
 
-(defun or-struktur-sid--get-children (sid)
-  "Get SIDs of existing child nodes for SID."
+(defun or-struktur-fid--get-children (fid)
+  "Get FIDs of existing child nodes for FID."
   (let (result)
-    (if sid
-        (let* ((sid (copy-sequence sid))
-               (fz-child (or-struktur-sid--resize sid (1+ (length sid)) 1)))
-          (while (or-struktur--db-sid2id-get fz-child)
+    (if fid
+        (let* ((fid (copy-sequence fid))
+               (fz-child (or-struktur-fid--resize fid (1+ (length fid)) 1)))
+          (while (or-struktur--db-fid2id-get fz-child)
             (push (copy-sequence fz-child) result)
-            (or-struktur-sid--lsd-inc fz-child)))
-      ;; Top-level folgezettels could be non-contiguous.
+            (or-struktur-fid--lsd-inc fz-child)))
+      ;; Top-level FIDs could be non-contiguous.
       (maphash (lambda (k _)
-                 (pcase-let ((`(,type ,sid) k))
-                   (when (and (eq type 'sid) (= (length sid) 1))
-                     (push (copy-sequence sid) result))))
+                 (pcase-let ((`(,type ,fid) k))
+                   (when (and (eq type 'fid) (= (length fid) 1))
+                     (push (copy-sequence fid) result))))
                or-struktur--db))
     result))
 
-(defun or-struktur-sid--get-parents (sid)
-  "Get parent SID of SID."
-  (list (butlast sid)))
+(defun or-struktur-fid--get-parents (fid)
+  "Get parent FID of FID."
+  (list (butlast fid)))
 
-(defun or-struktur-sid--get-siblings (sid)
-  "Get SIDs of existing siblings for SID."
+(defun or-struktur-fid--get-siblings (fid)
+  "Get FIDs of existing siblings for FID."
   (apply #'append
-         (mapcar (lambda (sid)
-                   (or-struktur-sid--get-children sid))
-                 (or-struktur-sid--get-parents sid))))
+         (mapcar (lambda (fid)
+                   (or-struktur-fid--get-children fid))
+                 (or-struktur-fid--get-parents fid))))
 
-;;; Strukturzettel Nodes
+;;; Strukturzettel (SZ) Nodes
 
 (defun or-struktur-sz-p (&optional node)
   "Return non-nil if NODE is strukturzettel node.
@@ -673,23 +673,18 @@ A strukturzettel is defined as an Org document with one of its file tags being
               (tags (org-roam-node-tags node)))
     (member or-struktur-sz-tag tags)))
 
-(defun or-struktur-sz-list (&optional fun)
-  "Get strukturzettel nodes.
-FUN (default: `identity') is a function that takes a strukturzettel node as an
-argument and returns transformation."
-  (let ((fun (or fun #'identity)))
-    (seq-keep (lambda (node)
-                (when (or-struktur-sz-p node)
-                  (funcall fun node)))
-              (org-roam-node-list))))
+(defun or-struktur-sz-nodes ()
+  "Get SZ nodes."
+  (seq-keep (lambda (node) (when (or-struktur-sz-p node) node))
+            (org-roam-node-list)))
 
 (defun or-struktur-sz-select ()
   "Select strukturzettel node.
 The function calls `completing-read' to prompt for a node interactively."
   (when-let*
-      ((options (or-struktur-sz-list
-                 (lambda (node)
-                   (cons (org-roam-node-title node) node)))))
+      ((options (mapcar (lambda (node)
+                          (cons (org-roam-node-title node) node))
+                        (or-struktur-sz-nodes))))
     (if (> (length options) 1)
         (alist-get (completing-read "Strukturzettel: " options nil t)
                    options nil nil #'equal)
@@ -697,31 +692,31 @@ The function calls `completing-read' to prompt for a node interactively."
 
 ;;; Nodes
 
-(defun or-struktur-node-has-sid-p (&optional node)
-  "Return non-nil if NODE has SID.
+(defun or-struktur-node-has-fid-p (&optional node)
+  "Return non-nil if NODE has an FID(s) associated with it.
 If not given, NODE will be node at point."
-  (and (or-struktur-sid--from-id (and node (org-roam-node-id node))) t))
+  (and (or-struktur-fid--from-id (and node (org-roam-node-id node))) t))
 
 (defun or-struktur-node-find ()
-  "Find and open node found in any strukturzettel."
+  "Find and open node found in any SZ node."
   (interactive)
   (org-roam-node-find nil nil (lambda (node)
-                                (or-struktur-node-has-sid-p node))))
+                                (or-struktur-node-has-fid-p node))))
 
 (defun or-struktur-node--op (type filter-fn)
   "Perform operation of TYPE on nodes related to node at point.
 TYPE is either `find' or `insert'.
 
-The function FILTER-FN takes an SID and returns related nodes."
+The function FILTER-FN takes an FID and returns related nodes."
   (if-let* ((node (and (derived-mode-p 'org-mode) (org-roam-node-at-point)))
-            (id (and (or-struktur-node-has-sid-p node)
+            (id (and (or-struktur-node-has-fid-p node)
                      (org-roam-node-id node))))
       (if-let* ((ids (seq-keep
-                      (lambda (sid) (or-struktur-sid--to-id sid))
+                      (lambda (fid) (or-struktur-fid--to-id fid))
                       (apply #'append
                              (seq-keep
-                              (lambda (sid) (funcall filter-fn sid))
-                              (or-struktur-sid--from-id id)))))
+                              (lambda (fid) (funcall filter-fn fid))
+                              (or-struktur-fid--from-id id)))))
                 (fun (lambda (node) (member (org-roam-node-id node) ids))))
           (pcase type
             ('find (org-roam-node-find nil nil fun))
@@ -732,32 +727,32 @@ The function FILTER-FN takes an SID and returns related nodes."
 (defun or-struktur-node-find-children ()
   "Find and open children of node at point."
   (interactive)
-  (or-struktur-node--op 'find #'or-struktur-sid--get-children))
+  (or-struktur-node--op 'find #'or-struktur-fid--get-children))
 
 (defun or-struktur-node-find-parents ()
   "Find and open parents of node at point."
   (interactive)
-  (or-struktur-node--op 'find #'or-struktur-sid--get-parents))
+  (or-struktur-node--op 'find #'or-struktur-fid--get-parents))
 
 (defun or-struktur-node-find-siblings ()
   "Find and open siblings of node at point."
   (interactive)
-  (or-struktur-node--op 'find #'or-struktur-sid--get-siblings))
+  (or-struktur-node--op 'find #'or-struktur-fid--get-siblings))
 
 (defun or-struktur-node-insert-child ()
   "Insert Org link to child of node at point."
   (interactive)
-  (or-struktur-node--op 'insert #'or-struktur-sid--get-children))
+  (or-struktur-node--op 'insert #'or-struktur-fid--get-children))
 
 (defun or-struktur-node-insert-parent ()
   "Insert Org link to parent of node at point."
   (interactive)
-  (or-struktur-node--op 'insert #'or-struktur-sid--get-parents))
+  (or-struktur-node--op 'insert #'or-struktur-fid--get-parents))
 
 (defun or-struktur-node-insert-sibling ()
   "Insert Org link to sibling of node at point."
   (interactive)
-  (or-struktur-node--op 'insert #'or-struktur-sid--get-siblings))
+  (or-struktur-node--op 'insert #'or-struktur-fid--get-siblings))
 
 ;;;
 ;;; Major Mode (or-struktur-view-mode)
@@ -1241,7 +1236,7 @@ Defaults to 0.5 (50% fade)."
                          (redisplay t)
                          (save-buffer)
                          (when-let* ((node (or-struktur-find-root-node)))
-                           (or-struktur--db-from-strukturzettel node)))
+                           (or-struktur--db-from-sz node)))
                      (mapcar (lambda (c) (face-remap-remove-relative c)) cookies)
                      (redisplay t)))))))
          buffer)))
@@ -1621,7 +1616,7 @@ If SELECT is non-nil, select the window after it becomes visible."
                 (setq win nil))))
         (when-let*
             ((items
-              (or (or-struktur-sid--from-id
+              (or (or-struktur-fid--from-id
                    (when-let*
                        ((elmt (org-element-context))
                         (lnk (and (eq (org-element-type elmt) 'link) elmt))
@@ -1630,24 +1625,24 @@ If SELECT is non-nil, select the window after it becomes visible."
                                    (org-element-property :path lnk))))
                      (car (split-string path "::" t)))
                    'extra)
-                  (or-struktur-sid--from-id (org-roam-node-id node) 'extra))))
+                  (or-struktur-fid--from-id (org-roam-node-id node) 'extra))))
           (unless
               (seq-find
                (lambda (item)
-                 (pcase-let* ((`(,fz ,sz-id ,pos) item))
+                 (pcase-let* ((`(,fid ,sz-id ,line-no) item))
                    (when (and win (or-struktur-view--shown-p sz-id))
                      ;; The target buffer is already displayed in side
                      ;; window, so just get the target line in it.
                      (setq sz-node (org-roam-node-from-id sz-id)
-                           sz-line pos)
+                           sz-line line-no)
                      t)))
                items)
             ;; The target buffer is yet to be displayed, so pick one,
             ;; display in side window and record the target line in the
             ;; buffer.
-            (pcase-let* ((`(,fz ,sz-id ,pos) (car items)))
+            (pcase-let* ((`(,fid ,sz-id ,line-no) (car items)))
               (setq sz-node (org-roam-node-from-id sz-id)
-                    sz-line pos)
+                    sz-line line-no)
               (unless (or-struktur-view--shown-p sz-id)
                 (when win
                   (delete-window win)
