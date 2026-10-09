@@ -1,0 +1,3 @@
+#+title: or-struktur
+
+Org Roam plugin for structure notes (strukturzettels).

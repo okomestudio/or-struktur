@@ -1,0 +1,1689 @@
+;;; or-struktur.el --- Structure Notes for Org Roam  -*- lexical-binding: t -*-
+;;
+;; Copyright (C) 2026 Taro Sato
+;;
+;; Author: Taro Sato <okomestudio@gmail.com>
+;; URL: https://github.com/okomestudio/or-struktur
+;; Version: 0.29.1
+;; Keywords: org-roam, convenience
+;; Package-Requires: ((emacs "30.1"))
+;;
+;;; License:
+;;
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or (at
+;; your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful, but
+;; WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+;; General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program. If not, see <https://www.gnu.org/licenses/>.
+;;
+;;; Commentary:
+;;
+;; This Org Roam plugin provides support for structure notes
+;; (strukturzettel in German).
+;;
+;;; Code:
+
+(require 'cl-lib)
+(require 'org)
+(require 'org-roam)
+
+(defgroup or-struktur nil
+  "Settings for `or-struktur'."
+  :group 'extensions
+  :link '(url-link "https://github.com/okomestudio/or-struktur"))
+
+(defcustom or-struktur-mode-prefix "C-c s"
+  "Prefix key sequence for `or-struktur-mode' commands."
+  :type 'string
+  :group 'or-struktur)
+
+(defcustom or-struktur-sz-tag "sz"
+  "Tag for `org-roam' nodes indicating strukturzettels."
+  :type 'string
+  :group 'or-struktur)
+
+(defcustom or-struktur-sid-text-placement 'before-string
+  "Specify side of overlay to show rendered SID."
+  :type '(choice before-string after-string)
+  :group 'or-struktur)
+
+(defcustom or-struktur-sid-text-wrapper "[%s]"
+  "String wrapper used for text representation of SID.
+When set to nil, text wrapping is disabled for all SIDs, regardless of
+per-strukturzettel settings."
+  :type 'string
+  :group 'or-struktur)
+
+(defcustom or-struktur-sid-text-format '("%d" ".%d")
+  "String format for SID representation.
+Allowed formatters are '%d' (numeric) and '%s' (alphabetic). When extended,
+alphanumeric components are alternated.
+
+Examples:
+
+  - (\"%d\" \"%s\") will render like '2d3a1' (numeric then alphabet, with the
+    rest alternating).
+  - (\"%d\" \"-%s\") will render like '2-d3a1' (second digit preceded by a
+    hyphen, with the rest alternating)."
+  :type '(list string)
+  :group 'or-struktur)
+
+(defcustom or-struktur-view-layout 'top
+  "Initial side window layout."
+  :type '(choice (const :tag "Top" top)
+                 (const :tag "Right" right)
+                 (const :tag "Left" left)
+                 (const :tag "Bottom" bottom))
+  :group 'or-struktur)
+
+(defcustom or-struktur-view-layout-sizes '((0.167 0.33 0.5) . (0.2 0.4 0.6))
+  "Preset sizes for left/right and top/bottom layout.
+Use `or-struktur-view--window-expand' to cycle through these options."
+  :type '(cons (repeat (choice number))
+               (repeat (choice number)))
+  :group 'or-struktur)
+
+(defcustom or-struktur-view-tags-exclude nil
+  "Tags to exclude from being added to headlines in strukturzettels."
+  :type '(repeat string)
+  :group 'or-struktur)
+
+(defcustom or-struktur-view-show-title 'minibuffer
+  "Target to show node title at point.
+Either nil or `minibuffer' is allowed."
+  :type '(choice (const :tag "Minibuffer" minibuffer)
+                 (const :tag "Do not show" nil))
+  :group 'or-struktur)
+
+(defcustom or-struktur-view-show-title-delay 0.2
+  "Delay before showing title in view mode."
+  :type 'number
+  :group 'or-struktur)
+
+(defcustom or-struktur-view-save-timer-delay 1.5
+  "Delay time in seconds for deferred buffer saving."
+  :type 'number
+  :group 'or-struktur)
+
+(defface or-struktur-level-1 '((t :inherit org-level-1 :height 1.0 :weight normal))
+  "Face for `org-level-1' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-2 '((t :inherit org-level-2 :height 1.0 :weight normal))
+  "Face for `org-level-2' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-3 '((t :inherit org-level-3 :height 1.0 :weight normal))
+  "Face for `org-level-3' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-4 '((t :inherit org-level-4 :height 1.0 :weight normal))
+  "Face for `org-level-4' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-5 '((t :inherit org-level-5 :height 1.0 :weight normal))
+  "Face for `org-level-5' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-6 '((t :inherit org-level-6 :height 1.0 :weight normal))
+  "Face for `org-level-6' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-7 '((t :inherit org-level-7 :height 1.0 :weight normal))
+  "Face for `org-level-7' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-8 '((t :inherit org-level-8 :height 1.0 :weight normal))
+  "Face for `org-level-8' in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-overlay
+  `((t :inherit fixed-pitch
+       :height 0.85
+       :underline nil
+       :foreground ,(face-attribute 'shadow :foreground)
+       :background ,(face-attribute 'shadow :background)))
+  "Face used for SID overlays."
+  :group 'or-struktur)
+
+(defconst or-struktur-view--buffer-name " strukturzettel buffer"
+  "Name of indirect buffer visiting strukturzettel file.")
+
+(defvar or-struktur--db (make-hash-table :test #'equal)
+  "Mapping storage.")
+
+(defvar or-struktur--ov-faces nil)
+
+(defvar or-struktur-sid-text-wrapper--alist nil)
+
+(defvar or-struktur-skipped-headline nil)
+
+;;; Utilities
+
+(defmacro or-struktur--debounce (delay &rest body)
+  "Run BODY after DELAY seconds of idle time, debouncing repeated invocations."
+  (declare (indent 1) (debug t))
+  (let ((timer-var (make-symbol (format "debounce-timer-%d" (sxhash body)))))
+    `(progn
+       (when (bound-and-true-p ,timer-var)
+         (cancel-timer ,timer-var))
+       (set (make-local-variable ',timer-var)
+            (run-with-idle-timer
+             ,delay nil
+             (lambda ()
+               ,@body))))))
+
+(defmacro or-struktur--disable-command (mode command)
+  "Disable COMMAND in major MODE."
+  (let* ((command-s
+          (replace-regexp-in-string "[\\#']" "" (format "%s" command)))
+         (mode-s (replace-regexp-in-string "'" "" (format "%s" mode)))
+         (fun (make-symbol (format "%s--disable-in-%s" command-s mode-s))))
+    `(progn
+       (defun ,fun (&rest _)
+         (when (derived-mode-p ',mode)
+           (user-error "%s is disabled in %s" ,command-s ,mode-s)))
+       (advice-add ,command :before #',fun))))
+
+(defmacro or-struktur--narrow-and-eval (beg end buffer &rest body)
+  "Narrow to region from BEG to END of BUFFER and evaluate BODY."
+  (declare (indent 3))
+  `(with-current-buffer (or buffer (current-buffer))
+     (let ((beg (or ,beg (point-min)))
+           (end (or ,end (point-max))))
+       (when (> (- end beg) 1)
+         (save-excursion
+           (save-restriction
+             (narrow-to-region beg end)
+             ,@body))))))
+
+(defun or-struktur--message (&rest _rest)
+  "Display via `message', but a little more quietly."
+  (let ((inhibit-message t))
+    (apply #'message _rest)))
+
+(defun or-struktur--alist-binary-search-floor (alist key)
+  "Return ALIST element whose key is floor of KEY."
+  (let* ((left 0)
+         (right (1- (length alist)))
+         result)
+    (while (<= left right)
+      (let* ((mid (+ left (/ (- right left) 2)))
+             (entry (nth mid alist))
+             (val (car entry)))
+        (cond
+         ((or (equal val key) (or-struktur-sid--less val key))
+          (setq result entry
+                left (1+ mid)))
+         (t (setq right (1- mid))))))
+    result))
+
+(defun or-struktur--list-binary-search-ceil (lis key)
+  "Return list, LIS, index of element whose value is ceil of KEY."
+  (let* ((left 0)
+         (right (1- (length lis)))
+         result)
+    (while (<= left right)
+      (let* ((mid (+ left (/ (- right left) 2)))
+             (elmt (nth mid lis)))
+        (cond
+         ((not (or-struktur-sid--less elmt key))
+          (setq result mid
+                right (1- mid)))
+         (t (setq left (1+ mid))))))
+    result))
+
+;;;
+;;; Minor Mode (or-struktur-mode)
+;;;
+
+(defvar-keymap or-struktur-mode-prefix-map
+  :doc "Keymap for `or-struktur-mode' under prefix."
+  "a" #'or-struktur-node-find
+  "c" #'or-struktur-node-find-children
+  "p" #'or-struktur-node-find-parents
+  "s" #'or-struktur-node-find-siblings
+  "i c" #'or-struktur-node-insert-child
+  "i p" #'or-struktur-node-insert-parent
+  "i s" #'or-struktur-node-insert-sibling)
+
+(defvar-keymap or-struktur-mode-map
+  :doc "Keymap for `or-struktur-mode'.")
+
+(keymap-set or-struktur-mode-map or-struktur-mode-prefix or-struktur-mode-prefix-map)
+
+;;;###autoload
+(define-minor-mode or-struktur-mode
+  "Minor mode for strukturzettels support to Org Roam."
+  :lighter " struct"
+  :group 'org-roam
+  :keymap 'or-struktur-mode-map
+  (pcase or-struktur-mode
+    ('t (or-struktur-mode--on))
+    (_ (or-struktur-mode--off))))
+
+(defun or-struktur-mode--on ()
+  "Activate `or-struktur-mode'."
+  (make-local-variable 'org-tags-exclude-from-inheritance)
+  (add-to-list 'org-tags-exclude-from-inheritance or-struktur-sz-tag)
+
+  (add-hook 'or-struktur-mode-hook #'or-struktur--db-init-maybe)
+  (add-hook 'after-save-hook #'or-struktur-mode--on-after-save 99 t)
+  (add-hook 'window-scroll-functions #'or-struktur-mode--on-window-scroll 99 t)
+  (add-hook 'before-change-functions #'or-struktur-mode--on-before-change 99 t)
+  (add-hook 'after-change-functions #'or-struktur-mode--on-after-change 99 t))
+
+(defun or-struktur-mode--off ()
+  "Deactivate `or-struktur-mode'."
+  (remove-hook 'after-change-functions #'or-struktur-mode--on-after-change t)
+  (remove-hook 'before-change-functions #'or-struktur-mode--on-before-change t)
+  (remove-hook 'window-scroll-functions #'or-struktur-mode--on-window-scroll t)
+  (remove-hook 'after-save-hook #'or-struktur-mode--on-after-save t)
+  (remove-hook 'or-struktur-mode-hook #'or-struktur--db-init-maybe)
+
+  (when (local-variable-p 'org-tags-exclude-from-inheritance)
+    (setq org-tags-exclude-from-inheritance
+          (delete or-struktur-sz-tag org-tags-exclude-from-inheritance))
+    (when (equal org-tags-exclude-from-inheritance
+                 (default-value 'org-tags-exclude-from-inheritance))
+      (kill-local-variable 'org-tags-exclude-from-inheritance))))
+
+(defun or-struktur-mode--on-before-change (beg end)
+  (or-struktur--ov-remove beg end))
+
+(defun or-struktur-mode--on-after-change (beg end len)
+  (or-struktur--ov-render beg end))
+
+(defun or-struktur-mode--on-window-scroll (win beg)
+  (or-struktur--ov-refresh beg (window-end win t) (window-buffer win)))
+
+(defun or-struktur-mode--on-after-save ()
+  ;; NOTE: Even when the save is performed in an indirect buffer, the
+  ;; hook runs on their base buffers.
+  (mapcar (lambda (node)
+            (or-struktur--db-from-strukturzettel node))
+          (let (nodes)
+            (org-with-wide-buffer
+             (goto-char (point-min))
+             (when-let* ((file-node (org-roam-node-at-point))
+                         (_ (member or-struktur-sz-tag (org-roam-node-tags file-node))))
+               (push file-node nodes))
+             (org-map-entries
+              (lambda ()
+                (when-let* ((_ (org-entry-get (point) "ID"))
+                            (node (org-roam-node-at-point))
+                            (_ (member or-struktur-sz-tag (org-roam-node-tags node))))
+                  (push node nodes)))
+              "ID={.+}" 'file))
+            nodes))
+
+  (when-let* ((buf (current-buffer))
+              (win (get-buffer-window buf))
+              (beg (window-start win))
+              (end (window-end win t)))
+    (or-struktur--ov-refresh beg end buf))
+
+  ;; Update struktur view window if visible.
+  (when-let* ((win (or-struktur-view--window))
+              (beg (window-start win))
+              (end (window-end win t)))
+    (with-selected-window win
+      (let ((buf (current-buffer)))
+        (or-struktur--ov-refresh beg end buf)))))
+
+;;; Mapping Storage for ID-SID Relations
+
+;; NOTE: The storage implementation uses a hash table. For scalability, perhaps
+;; consider using a relational database, e.g., SQLite.
+
+(defun or-struktur--db-empty-p ()
+  "Return non-nil if mapping storage is empty."
+  (= (hash-table-count or-struktur--db) 0))
+
+(defun or-struktur--db-clear ()
+  "Empty mapping storage."
+  (clrhash or-struktur--db))
+
+(defun or-struktur--db-sid2id-get (sid)
+  "Get ID for SID from mapping storage."
+  (when-let* ((v (gethash `(sid ,sid) or-struktur--db)))
+    (car v)))
+
+(defun or-struktur--db-id2sid-get (id &optional extra)
+  "Get all SIDs associated with ID from mapping storage.
+When EXTRA is non-nil, return also strukturzettel ID and the position of SID
+entry."
+  (apply #'append
+         (seq-keep
+          (lambda (sz-id)
+            (when-let*
+                ((db (gethash `(sz ,sz-id)
+                              or-struktur--db)))
+              (mapcar
+               (lambda (item)
+                 (pcase-let* ((`(,sid . ,line) item))
+                   (if extra `(,sid ,sz-id ,line) sid)))
+               (gethash id db))))
+          (gethash `(id ,id) or-struktur--db))))
+
+(defun or-struktur--db-init ()
+  "Fill mapping storage from all known strukturzettels."
+  (or-struktur--db-clear)
+  (dolist (node (or-struktur-sz-list))
+    (or-struktur--db-from-strukturzettel node)))
+
+(defun or-struktur--db-init-maybe ()
+  "If mapping storage is empty, initialize."
+  (when (or-struktur--db-empty-p)
+    (or-struktur--db-init)))
+
+(defun or-struktur--prop-get (props key &optional default)
+  "Get value for KEY in node PROPS.
+If value is nil, returns DEFAULT."
+  (let ((key (concat "STRUKTUR_" key)))
+    (or (cdr (assoc key props)) default)))
+
+(defun or-struktur--conf-from-props (props)
+  "Read configurations from node properties PROPS."
+  (let ((start (mapcar #'string-to-number
+                       (string-split (or-struktur--prop-get props "START" "1")))))
+    (when-let* ((v (or-struktur--prop-get props "TEXT_WRAPPER")))
+      (setf (alist-get start or-struktur-sid-text-wrapper--alist nil nil #'equal) v)
+      (setq or-struktur-sid-text-wrapper--alist (sort or-struktur-sid-text-wrapper--alist)))
+    (let (plist box)
+      (when-let* ((v (or-struktur--prop-get props "FACE_FOREGROUND"))
+                  (v (if (string= v "nil") nil v)))
+        (setq plist (append plist `(:foreground ,v))))
+      (when-let* ((v (or-struktur--prop-get props "FACE_BACKGROUND"))
+                  (v (if (string= v "nil") nil v)))
+        (setq plist (append plist `(:background ,v))))
+      (when-let* ((v (or-struktur--prop-get props "FACE_BOX_LINE_WIDTH")))
+        (setq box (append box `(:line-width ,v))))
+      (when-let* ((v (or-struktur--prop-get props "FACE_BOX_COLOR")))
+        (setq box (append box `(:color
+                                ,(pcase v
+                                   ("nil" (face-background 'default nil t))
+                                   (_ v))))))
+      (when box
+        (setq plist (append plist `(:box ,box))))
+      (when plist
+        (setf (alist-get start or-struktur--ov-faces nil nil #'equal) plist)
+        (setq or-struktur--ov-faces (sort or-struktur--ov-faces))))
+    start))
+
+(defun or-struktur--headline-skip-p (&optional element)
+  "Return non-nil if headeline ELEMENT matches a skip condition."
+  (when-let* ((elmt (or element (org-element-at-point))))
+    (cond
+     ((functionp or-struktur-skipped-headline)
+      (funcall or-struktur-skipped-headline elmt))
+     ((stringp or-struktur-skipped-headline)
+      (save-match-data
+        (string-match or-struktur-skipped-headline
+                      (org-element-property :raw-value elmt)))))))
+
+(defun or-struktur--db-from-strukturzettel (node)
+  "Update storage mapping from the strukturzettel at NODE."
+  (let* ((file (org-roam-node-file node))
+         (pos (org-roam-node-point node))
+         (inc-self nil)
+         (sz-id (org-roam-node-id node))
+         (sid (or-struktur--conf-from-props (org-roam-node-properties node)))
+         (sid-base-len (length sid))
+         (fdb (make-hash-table :test #'equal)))
+    (unless (and file (file-exists-p file))
+      (user-error "Node file missing or invalid: %s" file))
+    (with-current-buffer (find-file-noselect file)
+      (org-with-wide-buffer
+       (goto-char pos)
+       (let ((scope (if (org-at-heading-p) 'tree 'file))
+             (level-base (if (org-at-heading-p) (org-outline-level) 0))
+             (skip-subtree-level nil)
+             vs)
+         (org-map-entries
+          (lambda ()
+            (unless (and (not inc-self) (= (point) pos))
+              (when-let*
+                  ((elmt (org-element-at-point))
+                   (level (+ sid-base-len (- (org-element-property :level elmt) level-base)))
+                   (line (line-number-at-pos (org-element-property :begin elmt) t)))
+                (setq sid (or-struktur-sid--resize sid level))
+                (or-struktur-sid--lsd-inc sid)
+
+                (when-let*
+                    ((raw-title (org-element-property :title elmt))
+                     (_ (if (and skip-subtree-level (> level skip-subtree-level))
+                            nil
+                          (not (setq skip-subtree-level
+                                     (and (or-struktur--headline-skip-p elmt)
+                                          level)))))
+                     (title-str (if (stringp raw-title)
+                                    raw-title
+                                  (org-element-interpret-data raw-title)))
+                     (parsed-title (org-element-parse-secondary-string
+                                    title-str (org-element-restriction 'headline)))
+                     (lnk (org-element-map parsed-title 'link #'identity nil 'first-match))
+                     (id (and (equal (org-element-property :type lnk) "id")
+                              (org-element-property :path lnk))))
+                  (setq vs (gethash id fdb))
+                  (push (cons (copy-sequence sid) line) vs)
+                  (puthash id vs fdb)
+
+                  (let* ((key `(id ,id))
+                         (sz-ids (gethash key or-struktur--db)))
+                    (cl-pushnew sz-id sz-ids :test #'equal)
+                    (puthash key sz-ids or-struktur--db))
+
+                  (puthash `(sid ,(copy-sequence sid)) (cons id sz-id)
+                           or-struktur--db)))))
+          nil scope)))
+      (puthash `(sz ,sz-id) fdb or-struktur--db))))
+
+;;; Overlay Management
+
+(defun or-struktur--ov-put (beg end text)
+  "Add TEXT overlay for content from BEG to END."
+  (let* ((ov (make-overlay beg end))
+         (space (propertize " "
+                            'face '( :inherit or-struktur-overlay
+                                     :height 0.25 )))
+         (text (pcase or-struktur-sid-text-placement
+                 ('before-string (concat text space))
+                 ('after-string (concat space text)))))
+    (overlay-put ov or-struktur-sid-text-placement text)
+    (overlay-put ov 'category 'or-struktur)
+    (overlay-put ov 'evaporate t)))
+
+(defun or-struktur--ov-format (id)
+  "Render SIDs for ID as string for overlay."
+  (when-let* ((sids (or-struktur--db-id2sid-get id)))
+    (string-join
+     (mapcar
+      (lambda (sid)
+        (let ((text-wrapper
+               (if or-struktur-sid-text-wrapper
+                   (or (cdr (or-struktur--alist-binary-search-floor
+                             or-struktur-sid-text-wrapper--alist sid))
+                       or-struktur-sid-text-wrapper)
+                 "%s"))
+              (face (append '(:inherit or-struktur-overlay)
+                            (cdr (or-struktur--alist-binary-search-floor
+                                  or-struktur--ov-faces sid)))))
+          (propertize (format text-wrapper (or-struktur-sid--render sid))
+                      'face face)))
+      sids)
+     (string ?\u200B))))
+
+(defun or-struktur--ov-render-in-title ()
+  "Render SID overlays in document title.
+The title is obtained from `#+title:'."
+  (goto-char (point-min))     ; this respects narrowing
+  (when-let* ((node (org-roam-node-at-point))
+              (s (or-struktur--ov-format (org-roam-node-id node))))
+    (when (re-search-forward "^#\\+TITLE:[ \t]*\\(.*\\)$" (point-max) t)
+      (or-struktur--ov-put (match-beginning 1) (match-end 1) s))))
+
+(defun or-struktur--ov-render-in-headlines ()
+  "Render SID overlays in headlines.
+IDs are extracted from headline properties."
+  (org-element-map (org-element-parse-buffer) 'headline
+    (lambda (elmt)
+      (when-let* ((id (org-element-property :ID elmt))
+                  (s (or-struktur--ov-format id))
+                  (beg (org-element-property :title-begin elmt))
+                  (end (org-element-property :title-end elmt)))
+        (or-struktur--ov-put beg end s)))))
+
+(defun or-struktur--ov-render-link (elmt)
+  "Render SID overlay for link ELMT."
+  (when-let* ((id (and (string= (org-element-property :type elmt) "id")
+                       (org-element-property :path elmt)))
+              (s (or-struktur--ov-format id))
+              (beg (org-element-property :begin elmt))
+              (end (org-element-property :end elmt)))
+    (or-struktur--ov-put beg end s)))
+
+(defun or-struktur--ov-remove (&optional beg end buffer)
+  "Remove SID overlays in BUFFER region from BEG to END."
+  (or-struktur--narrow-and-eval beg end buffer
+    (remove-overlays beg end 'category 'or-struktur)))
+
+(defun or-struktur--ov-render (&optional beg end buffer)
+  "Render SID overlays in BUFFER region from BEG to END."
+  (or-struktur--narrow-and-eval beg end buffer
+    (or-struktur--ov-render-in-title)
+    (or-struktur--ov-render-in-headlines)
+    (org-element-map (org-element-parse-buffer) 'link
+      #'or-struktur--ov-render-link)))
+
+(defun or-struktur--ov-refresh (&optional beg end buffer)
+  "Refresh SID overlays in BUFFER region from BEG to END."
+  (or-struktur--ov-remove beg end buffer)
+  (or-struktur--ov-render beg end buffer))
+
+;;; Struktur ID (SID)
+
+;; An SID is an ID of an org-roam node assigned by its placement in a
+;; strukturzettel. The underlying data for SID is a list of integers,
+;; e.g., (2 3 5).
+
+(defun or-struktur-sid--less (a b)
+  "Return non-nil if SID A is less than B."
+  (cond ((null a) (not (null b)))
+        ((null b) nil)
+        ((< (car a) (car b)) t)
+        ((> (car a) (car b)) nil)
+        (t (or-struktur-sid--less (cdr a) (cdr b)))))
+
+(defun or-struktur-sid--number-to-alpha (n)
+  "Convert positive N to alphabet representation.
+The return value is a string or nil if N is not a positive integer."
+  (unless (and (integerp n) (> n 0))
+    (error "N must be a positive integer"))
+  (let ((result "")
+        (num n))
+    (while (> num 0)
+      (let* ((adjusted (1- num))
+             (remainder (mod adjusted 26))
+             (letter (char-to-string (+ ?a remainder))))
+        (setq result (concat letter result))
+        (setq num (/ adjusted 26))))
+    result))
+
+(defun or-struktur-sid--render (sid)
+  "Render SID using preset format.
+The preset format is set with `or-struktur-sid-text-format'."
+  (string-join
+   (cl-loop with (converter) = '(nil)
+            for i below (length sid)
+            collect
+            (let ((fmt (or (nth i or-struktur-sid-text-format)
+                           (if (eq converter #'identity) "%s" "%d"))))
+              (setq converter (or (and (string-search "%d" fmt) #'identity)
+                                  #'or-struktur-sid--number-to-alpha))
+              (format fmt (funcall converter (nth i sid)))))))
+
+(defun or-struktur-sid--resize (sid n &optional initval)
+  "Resize SID to N digits.
+If given, fill new digit(s) with INITVAL (defaults to zero)."
+  (let ((initval (or initval 0))
+        (m (length sid)))
+    (cond ((< n m) (seq-take sid n))
+          ((< m n) (append sid (make-list (- n m) initval)))
+          (t sid))))
+
+(defun or-struktur-sid--lsd-inc (sid)
+  "Increment least-significant digit of SID."
+  (let ((lsd (1- (length sid))))
+    (setcar (nthcdr lsd sid) (1+ (nth lsd sid)))))
+
+(defun or-struktur-sid--from-id (&optional id extra)
+  "Get SIDs for node ID.
+If not given, ID defaults to that of current node.
+
+See `or-struktur--mapping-id2fz-get' for EXTRA."
+  (or-struktur--db-id2sid-get (or id (org-roam-id-at-point)) extra))
+
+(defun or-struktur-sid--to-id (sid)
+  "Get node ID for SID."
+  (or-struktur--db-sid2id-get sid))
+
+(defun or-struktur-sid--get-children (sid)
+  "Get SIDs of existing child nodes for SID."
+  (let (result)
+    (if sid
+        (let* ((sid (copy-sequence sid))
+               (fz-child (or-struktur-sid--resize sid (1+ (length sid)) 1)))
+          (while (or-struktur--db-sid2id-get fz-child)
+            (push (copy-sequence fz-child) result)
+            (or-struktur-sid--lsd-inc fz-child)))
+      ;; Top-level folgezettels could be non-contiguous.
+      (maphash (lambda (k _)
+                 (pcase-let ((`(,type ,sid) k))
+                   (when (and (eq type 'sid) (= (length sid) 1))
+                     (push (copy-sequence sid) result))))
+               or-struktur--db))
+    result))
+
+(defun or-struktur-sid--get-parents (sid)
+  "Get parent SID of SID."
+  (list (butlast sid)))
+
+(defun or-struktur-sid--get-siblings (sid)
+  "Get SIDs of existing siblings for SID."
+  (apply #'append
+         (mapcar (lambda (sid)
+                   (or-struktur-sid--get-children sid))
+                 (or-struktur-sid--get-parents sid))))
+
+;;; Strukturzettel Nodes
+
+(defun or-struktur-sz-p (&optional node)
+  "Return non-nil if NODE is strukturzettel node.
+A strukturzettel is defined as an Org document with one of its file tags being
+`or-struktur-sz-tag'."
+  (when-let* ((node (or node (org-roam-node-at-point)))
+              (tags (org-roam-node-tags node)))
+    (member or-struktur-sz-tag tags)))
+
+(defun or-struktur-sz-list (&optional fun)
+  "Get strukturzettel nodes.
+FUN (default: `identity') is a function that takes a strukturzettel node as an
+argument and returns transformation."
+  (let ((fun (or fun #'identity)))
+    (seq-keep (lambda (node)
+                (when (or-struktur-sz-p node)
+                  (funcall fun node)))
+              (org-roam-node-list))))
+
+(defun or-struktur-sz-select ()
+  "Select strukturzettel node.
+The function calls `completing-read' to prompt for a node interactively."
+  (when-let*
+      ((options (or-struktur-sz-list
+                 (lambda (node)
+                   (cons (org-roam-node-title node) node)))))
+    (if (> (length options) 1)
+        (alist-get (completing-read "Strukturzettel: " options nil t)
+                   options nil nil #'equal)
+      (cdar options))))
+
+;;; Nodes
+
+(defun or-struktur-node-has-sid-p (&optional node)
+  "Return non-nil if NODE has SID.
+If not given, NODE will be node at point."
+  (and (or-struktur-sid--from-id (and node (org-roam-node-id node))) t))
+
+(defun or-struktur-node-find ()
+  "Find and open node found in any strukturzettel."
+  (interactive)
+  (org-roam-node-find nil nil (lambda (node)
+                                (or-struktur-node-has-sid-p node))))
+
+(defun or-struktur-node--op (type filter-fn)
+  "Perform operation of TYPE on nodes related to node at point.
+TYPE is either `find' or `insert'.
+
+The function FILTER-FN takes an SID and returns related nodes."
+  (if-let* ((node (and (derived-mode-p 'org-mode) (org-roam-node-at-point)))
+            (id (and (or-struktur-node-has-sid-p node)
+                     (org-roam-node-id node))))
+      (if-let* ((ids (seq-keep
+                      (lambda (sid) (or-struktur-sid--to-id sid))
+                      (apply #'append
+                             (seq-keep
+                              (lambda (sid) (funcall filter-fn sid))
+                              (or-struktur-sid--from-id id)))))
+                (fun (lambda (node) (member (org-roam-node-id node) ids))))
+          (pcase type
+            ('find (org-roam-node-find nil nil fun))
+            ('insert (org-roam-node-insert fun)))
+        (message "No nodes found"))
+    (warn "Not in a relevant org-roam node")))
+
+(defun or-struktur-node-find-children ()
+  "Find and open children of node at point."
+  (interactive)
+  (or-struktur-node--op 'find #'or-struktur-sid--get-children))
+
+(defun or-struktur-node-find-parents ()
+  "Find and open parents of node at point."
+  (interactive)
+  (or-struktur-node--op 'find #'or-struktur-sid--get-parents))
+
+(defun or-struktur-node-find-siblings ()
+  "Find and open siblings of node at point."
+  (interactive)
+  (or-struktur-node--op 'find #'or-struktur-sid--get-siblings))
+
+(defun or-struktur-node-insert-child ()
+  "Insert Org link to child of node at point."
+  (interactive)
+  (or-struktur-node--op 'insert #'or-struktur-sid--get-children))
+
+(defun or-struktur-node-insert-parent ()
+  "Insert Org link to parent of node at point."
+  (interactive)
+  (or-struktur-node--op 'insert #'or-struktur-sid--get-parents))
+
+(defun or-struktur-node-insert-sibling ()
+  "Insert Org link to sibling of node at point."
+  (interactive)
+  (or-struktur-node--op 'insert #'or-struktur-sid--get-siblings))
+
+;;;
+;;; Major Mode (or-struktur-view-mode)
+;;;
+
+(defvar-keymap or-struktur-view-mode-map
+  :doc "Keymap for `or-struktur-mode' under prefix."
+  ;; Similar to org-speed-command:
+  "n" #'or-struktur-view-next-headline
+  "p" #'or-struktur-view-previous-headline
+  "f" #'or-struktur-view-next-sibling-headline
+  "b" #'or-struktur-view-previous-sibling-headline
+  "u" #'or-struktur-view-parent-headline
+
+  "o" #'or-struktur-view-open-zettel
+  "v" #'or-struktur-view-visit-zettel
+  "<return>" #'or-struktur-view-visit-zettel
+
+  "i" #'or-struktur-view-imenu
+  "<backtab>" #'or-struktur-view-cycle-global-visibility
+  "<tab>" #'or-struktur-view-cycle-visibility
+
+  "C c" #'or-struktur-view-insert-child
+  "C s" #'or-struktur-view-insert-sibling
+
+  "M-<left>" #'or-struktur-view-do-headline-promote
+  "M-<right>" #'or-struktur-view-do-headline-demote
+  "M-S-<left>" #'or-struktur-view-do-subtree-promote
+  "M-S-<right>" #'or-struktur-view-do-subtree-demote
+  "M-<down>" #'or-struktur-view-do-subtree-move-down
+  "M-<up>" #'or-struktur-view-do-subtree-move-up
+  "S k" #'or-struktur-view-do-subtree-cut
+  "S y c" #'or-struktur-view-do-subtree-paste-as-child
+  "S y s" #'or-struktur-view-do-subtree-paste-as-sibling
+
+  "T" #'or-struktur-view-edit-link-desc
+  "E" #'or-struktur-view-edit
+
+  "O" #'or-struktur-view-switch-strukturzettel
+  "L t" #'or-struktur-view-top
+  "L r" #'or-struktur-view-right
+  "L b" #'or-struktur-view-bottom
+  "L l" #'or-struktur-view-left
+  "W" #'or-struktur-view-expand
+
+  "V" #'or-struktur-view-preview-toggle
+  "R" #'font-lock-fontify-buffer
+
+  "q" #'delete-window)
+
+(set-keymap-parent or-struktur-view-mode-map text-mode-map)
+
+;;;###autoload
+(define-derived-mode or-struktur-view-mode org-mode "struktur"
+  "Major mode for strukturzettels."
+  :group 'org-roam
+  ;; Load directory local variables, as indirect buffers do not load
+  ;; them by default.
+  (when-let*
+      ((base (buffer-base-buffer))
+       (default-directory (buffer-local-value 'default-directory base)))
+    (hack-dir-local-variables-non-file-buffer))
+
+  (read-only-mode 1)
+
+  ;; Disable input method
+  (make-local-variable 'current-input-method)
+  (setq current-input-method nil)
+  (make-local-variable 'default-input-method)
+  (setq default-input-method nil)
+  (or-struktur--disable-command 'or-struktur-view-mode
+                                #'toggle-input-method)
+
+  ;; Buffer-local face substitution
+  (setq-local face-remapping-alist
+              '((org-level-1 or-struktur-level-1)
+                (org-level-2 or-struktur-level-2)
+                (org-level-3 or-struktur-level-3)
+                (org-level-4 or-struktur-level-4)
+                (org-level-5 or-struktur-level-5)
+                (org-level-6 or-struktur-level-6)
+                (org-level-7 or-struktur-level-7)
+                (org-level-8 or-struktur-level-8))))
+
+(defun or-struktur-view--on-init ()
+  (setq-local repeat-mode nil) ; this mode is sluggish
+  (setq-local truncate-lines t)
+  (setq-local org-use-speed-commands nil)
+  (text-scale-set -0.6)
+
+  (or-struktur--hide-skipped-headlines)
+
+  (add-hook 'org-capture-before-finalize-hook #'or-struktur-view--on-capture-before-finalize)
+  (add-hook 'org-capture-after-finalize-hook #'or-struktur-view--on-capture-after-finalize))
+
+(add-hook 'or-struktur-view-mode-hook #'or-struktur-view--on-init)
+
+(defvar-local or-struktur--hidden-subtree-spec 'or-struktur-hidden-subtree
+  "Invisibility spec for skipped subtrees.")
+
+(defun or-struktur--hide-skipped-headlines ()
+  (org-map-entries
+   (lambda ()
+     (when (or-struktur--headline-skip-p)
+       (save-excursion
+         (org-back-to-heading t)
+         (message "Not a strukturzettel headline: %s"
+                  (org-element-property :raw-value (org-element-at-point)))
+         (add-to-invisibility-spec or-struktur--hidden-subtree-spec)
+         (let* ((beg (max (point-min) (1- (line-beginning-position))))
+                (end (save-excursion
+                       (org-end-of-subtree t t)
+                       (point))))
+           (let ((ov (make-overlay beg end)))
+             (overlay-put ov 'invisible or-struktur--hidden-subtree-spec)
+             (overlay-put ov 'category 'or-struktur-hidden-subtree-ov)
+             (overlay-put ov 'priority 100)
+
+             ;; To allow isearch/occur to reveal the hidden region, use
+             ;; the following:
+             ;; (overlay-put ov 'isearch-open-invisible
+             ;;              (lambda (ov) (delete-overlay ov)))
+
+             (overlay-put ov 'line-prefix "")
+             (overlay-put ov 'wrap-prefix ""))))))))
+
+(defun or-struktur-view-cycle-global (fun &rest _args)
+  (cond
+   ((derived-mode-p 'or-struktur-view-mode)
+    ;; Follows `org-cycle-internal-global', but limits cycling to
+    ;; overview and contents:
+    (cond
+     ((and (eq last-command this-command)
+	   (eq org-cycle-global-status 'overview))
+      (run-hook-with-args 'org-cycle-pre-hook 'contents)
+      (org-cycle-content)
+      (setq org-cycle-global-status 'contents)
+      (run-hook-with-args 'org-cycle-hook 'contents))
+     (t
+      (run-hook-with-args 'org-cycle-pre-hook 'overview)
+      (org-cycle-overview)
+      (setq org-cycle-global-status 'overview)
+      (run-hook-with-args 'org-cycle-hook 'overview))))
+   (t (apply fun _args))))
+
+(advice-add #'org-cycle-global :around #'or-struktur-view-cycle-global)
+
+(defun or-struktur-headline-has-children-p ()
+  "Return non-nil if the headline at point has direct child sub-headlines."
+  (save-excursion
+    (org-back-to-heading t)
+    (org-goto-first-child)))
+
+(defun or-struktur-headline-has-body-p ()
+  "Return non-nil if headline at point has non-whitespace body text."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((b-beg (save-excursion (org-end-of-meta-data t) (point)))
+          (b-end (save-excursion
+                   (if (re-search-forward org-outline-regexp-bol nil t)
+                       (match-beginning 0)
+                     (point-max)))))
+      (and (< b-beg b-end)
+           (string-match-p "[^ \t\n\r]"
+                           (buffer-substring-no-properties b-beg b-end))))))
+
+(defun or-struktur-headline-fold-state ()
+  "Return the fold state for the headline at point.
+Returns one of:
+  'empty      - No body and no child headlines exist
+  'folded     - Entire subtree (or body) is hidden
+  'children   - Body text is hidden, but child subheadlines are visible
+  'expanded   - Everything in the entry is visible"
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((has-child (or-struktur-headline-has-children-p))
+          (has-body (or-struktur-headline-has-body-p)))
+      (cond
+       ((and (not has-child) (not has-body))
+        'empty)
+       ((not (org-fold-folded-p (line-end-position)))
+        'expanded)
+       (has-child
+        (let ((child-pos (save-excursion (org-goto-first-child) (point))))
+          (if (org-fold-folded-p child-pos)
+              'folded    ; child headline itself is inside the fold
+            'children))) ; body is folded, but child headline is visible
+       (t 'folded)))))
+
+(defun or-struktur-view-cycle ()
+  (when (derived-mode-p 'or-struktur-view-mode)
+    (when (and (org-at-heading-p) (bolp))
+      (save-excursion
+        (org-back-to-heading t)
+        (if (not (member (or-struktur-headline-fold-state) '(children expanded)))
+            (org-fold-show-branches)
+          (org-fold-subtree t)))
+      t)))
+
+(add-hook 'org-tab-first-hook #'or-struktur-view-cycle)
+
+(defun or-struktur-view--on-capture-before-finalize ()
+  (when-let*
+      ((buf (and (bound-and-true-p org-capture-plist)
+                 (eq (plist-get org-capture-plist :finalize) 'insert-link)
+                 (plist-get org-capture-plist :original-buffer)))
+       (_ (string-prefix-p or-struktur-view--buffer-name (buffer-name buf))))
+    (with-current-buffer buf
+      (read-only-mode -1))))
+
+(defun or-struktur-view--on-capture-after-finalize ()
+  (when-let* ((buf (current-buffer))
+              (_ (string-prefix-p or-struktur-view--buffer-name (buffer-name buf)))
+              (r-beg (save-excursion (beginning-of-line) (point)))
+              (r-end (save-excursion (end-of-line) (point)))
+              (base-buf (buffer-base-buffer)))
+    (with-current-buffer buf
+      (if org-note-abort
+          (revert-buffer nil t t)
+        (when (buffer-modified-p)
+          (or-struktur-view--schedule-save buf or-struktur-view-save-timer-delay)))
+      (read-only-mode 1)
+      (goto-char r-beg))
+    (with-current-buffer base-buf
+      (font-lock-flush r-beg r-end)
+      (font-lock-ensure r-beg r-end))))
+
+(defun or-struktur-view--link ()
+  "Return first Org link element on current line or nil if it does not exist."
+  (save-excursion
+    (beginning-of-line)
+    (let ((end (line-end-position))
+          lnk)
+      (while (and (not lnk)
+                  (< (point) end)
+                  (re-search-forward org-link-any-re end t))
+        (goto-char (match-beginning 0))
+        (when-let* ((el (org-element-context)))
+          (when (eq (org-element-type el) 'link)
+            (setq lnk el))))
+      lnk)))
+
+(defun or-struktur-view--headline-link ()
+  "Get link on headline at point if exists."
+  (when-let*
+      ((raw (org-get-heading t t t t))
+       (parsed (org-element-parse-secondary-string raw '(link))))
+    (org-element-map parsed 'link #'identity nil 'first-match)))
+
+(defun or-struktur-view--headline-linked-node ()
+  "Get node linked on headline at point if exists."
+  (when-let*
+      ((lnk (or-struktur-view--headline-link))
+       (id (and (equal (org-element-property :type lnk) "id")
+                (org-element-property :path lnk)))
+       (node (org-roam-node-from-id id)))
+    node))
+
+(defun or-struktur-view-tags-refresh ()
+  "Refresh tags in headline at point in view mode.
+Use `or-struktur-view-tags-exclude' to exclude tags from being added."
+  (interactive)
+  (when (not (org-at-heading-p))
+    (warn "Point not on Org headline"))
+  (when-let*
+      ((lnk (or-struktur-view--headline-link))
+       (lnk-type (and lnk (org-element-property :type lnk)))
+       (lnk-path (and lnk (org-element-property :path lnk)))
+       (id (and (equal lnk-type "id") lnk-path))
+       (node (org-roam-node-from-id id))
+       (tags (cl-set-difference (org-roam-node-tags node)
+                                or-struktur-view-tags-exclude
+                                :test #'equal)))
+    (org-set-tags tags)))
+
+(defun or-struktur-view-tags-refresh-all ()
+  "Refresh tags in all headlines in view mode.
+On each headline, refresh is performed by `or-struktur-view-tags-refresh'."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (org-map-entries #'or-struktur-view-tags-refresh)))
+
+(defun or-struktur-view-preview-async ()
+  "Async-open node linked in current headline."
+  (when (org-at-heading-p)
+    (or-struktur--debounce 0.2
+      (when-let* ((node (or-struktur-view--headline-linked-node)))
+        (display-buffer (find-file-noselect (org-roam-node-file node))
+                        '((display-buffer-use-some-window)
+                          (inhibit-same-window . t)))))))
+
+(defun or-struktur-view-preview-toggle ()
+  "Toggle preview in view."
+  (interactive)
+  (when (or-struktur-sz-p)
+    (if (member #'or-struktur-view-preview-async post-command-hook)
+        (remove-hook 'post-command-hook #'or-struktur-view-preview-async t)
+      (add-hook 'post-command-hook #'or-struktur-view-preview-async nil t))))
+
+;; Show node title in minibuffer
+
+(defun or-struktur-view-show-title ()
+  "Show note title in target specified in `or-struktur-view-show-title'."
+  (or-struktur--debounce or-struktur-view-show-title-delay
+    (when-let* ((lnk (or-struktur-view--headline-link))
+                (contents (org-element-contents lnk))
+                (desc (org-element-interpret-data contents)))
+      (when (eq or-struktur-view-show-title 'minibuffer)
+        (minibuffer-message "Note: %s" desc)))))
+
+(defun or-struktur-view-next-headline ()
+  (interactive)
+  (call-interactively #'org-next-visible-heading))
+
+(defun or-struktur-view-previous-headline ()
+  (interactive)
+  (call-interactively #'org-previous-visible-heading))
+
+(defun or-struktur-view-next-sibling-headline ()
+  (interactive)
+  (call-interactively #'org-forward-heading-same-level))
+
+(defun or-struktur-view-previous-sibling-headline ()
+  (interactive)
+  (call-interactively #'org-backward-heading-same-level))
+
+(defun or-struktur-view-parent-headline ()
+  (interactive)
+  (call-interactively #'outline-up-heading))
+
+(defun or-struktur-view-open-zettel ()
+  "Open zettel node at line in another window."
+  (interactive)
+  (when-let*
+      ((node (or-struktur-view--headline-linked-node))
+       (file (org-roam-node-file node))
+       (buf (find-file-noselect file))
+       (win (get-mru-window nil t t)))
+    (display-buffer buf
+                    `((;; display-buffer-in-previous-window
+                       display-buffer-reuse-window
+                       display-buffer-use-some-window)
+                      (inhibit-same-window . t)
+                      (window . ,win)))))
+
+(defun or-struktur-view-visit-zettel (&rest _rest)
+  "Override `org-return' for faster navigation.
+This command changes default behavior to find a link on current header and visit
+if such a link exists."
+  (interactive)
+  (if-let* ((node (or-struktur-view--headline-linked-node)))
+      (org-roam-node-visit node)
+    (apply #'org-return _rest)))
+
+(defun or-struktur-view-imenu ()
+  "Run `imenu' on buffer."
+  (interactive)
+  (imenu))
+
+(defun or-struktur-view-cycle-global-visibility ()
+  "Run `org-cycle-global'."
+  (interactive)
+  (org-cycle-global))
+
+(defun or-struktur-view-cycle-visibility ()
+  "Run `org-cycle'."
+  (interactive)
+  (org-cycle))
+
+(defun or-struktur-view--capture-active-p ()
+  "Return non-nil if at least one `org-capture' buffer is live (pre-finalize)."
+  ;; TODO(2026-03-09): For accurate identification, try to detect the live
+  ;; capture session is initiated within `or-struktur-view--modify'?
+  (seq-some (lambda (buf)
+              (with-current-buffer buf
+                (and (derived-mode-p 'org-mode)
+                     (bound-and-true-p org-capture-mode))))
+            (buffer-list)))
+
+(defun or-struktur--buffer-active-faces (&optional buffer)
+  "Return a list of all unique face symbols actively used in BUFFER."
+  (interactive "i\np")
+  (with-current-buffer (or buffer (current-buffer))
+    (when-let* ((win (get-buffer-window buffer 'visible))
+                (beg (window-start win))
+                (end (window-end win t)))
+      (save-restriction
+        (let ((faces (make-hash-table :test 'eq))
+              (pos beg)
+              (limit end))
+          (cl-labels ((collect (val)
+                        (cond
+                         ((symbolp val)
+                          (when val (puthash val t faces)))
+                         ((and (listp val) (not (keywordp (car val))))
+                          (dolist (item val)
+                            (collect item))))))
+            ;; Scan text properties ('face and 'font-lock-face):
+            (while (< pos limit)
+              (let ((f (get-text-property pos 'face))
+                    (fl (get-text-property pos 'font-lock-face))
+                    (next-f (next-single-property-change pos 'face nil limit))
+                    (next-fl (next-single-property-change pos 'font-lock-face nil limit)))
+                (when f (collect f))
+                (when fl (collect fl))
+                (setq pos (min next-f next-fl))))
+
+            ;; Scan overlay faces:
+            (dolist (ov (overlays-in beg end))
+              (let ((ov-f (overlay-get ov 'face)))
+                (when ov-f (collect ov-f))))
+
+            (let ((result (hash-table-keys faces)))
+              (if (called-interactively-p 'interactive)
+                  (message "Active faces (%d): %s"
+                           (length result)
+                           (mapconcat #'symbol-name result ", "))
+                result))))))))
+
+(defun or-struktur--fade-face-color (face &optional fade-factor)
+  "Return a plist of faded :foreground and :background for FACE.
+FADE-FACTOR is a float from 0.0 (no change) to 1.0 (full white/black).
+Defaults to 0.5 (50% fade)."
+  (let* ((factor (or fade-factor 0.5))
+         (target-hex (face-attribute 'default :background nil t))
+         (bg (face-attribute face :background nil t))
+         (fg (face-attribute face :foreground nil t))
+         (blend (lambda (color-name)
+                  (let ((rgb-orig (color-name-to-rgb color-name))
+                        (rgb-target (color-name-to-rgb target-hex)))
+                    (when (and rgb-orig rgb-target)
+                      (apply #'color-rgb-to-hex
+                             (color-blend rgb-target rgb-orig factor)))))))
+    (list :foreground (or (funcall blend fg) target-hex)
+          :background (or (funcall blend bg) target-hex))))
+
+(defun or-struktur-find-root-node ()
+  "Find the root node of the current strukturzettel at point."
+  (save-excursion
+    (if (org-before-first-heading-p)
+        (progn
+          (goto-char (point-min))
+          (when-let* ((node (org-roam-node-at-point))
+                      (_ (member or-struktur-sz-tag (org-roam-node-tags node))))
+            node))
+      (unless (org-at-heading-p)
+        (org-back-to-heading t))
+      (let ((found nil))
+        (while (and (not found)
+                    (progn
+                      ;; Ignore inherited tags
+                      (when (member or-struktur-sz-tag (org-get-tags nil t))
+                        (setq found (point)))
+                      (unless found
+                        (org-up-heading-safe)))))
+        (when found
+          (org-roam-node-at-point))))))
+
+(defvar-local or-struktur-view--save-timer nil
+  "Timer for deferred buffer saving.")
+
+(defun or-struktur-view--schedule-save (buffer delay)
+  "Schedule `save-buffer' for BUFFER after DELAY seconds of inactivity."
+  (when (timerp or-struktur-view--save-timer)
+    (cancel-timer or-struktur-view--save-timer))
+  (setq or-struktur-view--save-timer
+        (run-with-idle-timer
+         delay nil
+         (lambda (b)
+           (when (buffer-live-p b)
+             (with-current-buffer b
+               (when (buffer-modified-p)
+                 (let ((cookies
+                        (mapcar (lambda (face)
+                                  (face-remap-add-relative
+                                   face (or-struktur--fade-face-color face)))
+                                (or-struktur--buffer-active-faces))))
+                   (unwind-protect
+                       (progn
+                         (redisplay t)
+                         (save-buffer)
+                         (when-let* ((node (or-struktur-find-root-node)))
+                           (or-struktur--db-from-strukturzettel node)))
+                     (mapcar (lambda (c) (face-remap-remove-relative c)) cookies)
+                     (redisplay t)))))))
+         buffer)))
+
+(defmacro or-struktur-view--modify-subtree (&rest body)
+  "Temporarily toggle `read-only-mode' while running BODY.
+Outside the capture, the buffer will be saved after an idle
+delay (`or-struktur-view-save-timer-delay')."
+  `(let ((buf (current-buffer))
+         (inhibit-read-only t)
+         (inhibit-save nil))
+     (atomic-change-group
+       (let ((head-marker (copy-marker (save-excursion
+                                         (org-back-to-heading t)
+                                         (point)))))
+         (read-only-mode -1)
+         (unwind-protect
+             (progn
+               (save-current-buffer
+                 ,@body)
+               (save-excursion
+                 (goto-char head-marker)
+                 (let* ((r-beg (point))
+                        (r-end (progn (org-end-of-subtree t t) (point)))
+                        (target-buf (or (buffer-base-buffer) (current-buffer))))
+                   (with-current-buffer target-buf
+                     (save-restriction
+                       (widen)
+                       (font-lock-flush r-beg r-end)
+                       (font-lock-ensure r-beg r-end)))
+                   (or-struktur--ov-refresh r-beg r-end))))
+           (read-only-mode +1)
+           (set-marker head-marker nil))))
+     (if inhibit-save
+         (when or-struktur-view--save-timer
+           (cancel-timer or-struktur-view--save-timer))
+       (or-struktur-view--schedule-save buf or-struktur-view-save-timer-delay))))
+
+(defmacro or-struktur-view-insert- (&rest body)
+  `(or-struktur-view--modify-subtree
+    (let ((org-insert-heading-respect-content t)
+          insert-action)
+      (cl-flet ((on-post-insert (&rest _) (setq insert-action 'existing))
+                (on-new-node (&rest _) (setq insert-action 'capture)))
+        (add-hook 'org-roam-post-node-insert-hook #'on-post-insert)
+        (add-hook 'org-roam-capture-new-node-hook #'on-new-node)
+        (unwind-protect
+            (progn
+              (progn ,@body)
+              (call-interactively #'org-roam-node-insert)
+              (setq head-marker (copy-marker (point)))
+              (cond
+               ((eq insert-action 'existing)
+                (setq inhibit-save nil)
+                (beginning-of-line))
+               ((or (eq insert-action 'capture)
+                    (bound-and-true-p org-capture-mode)
+                    (and (boundp 'org-capture-plist) org-capture-plist))
+                (setq inhibit-save t))))
+          (remove-hook 'org-roam-capture-new-node-hook #'on-new-node)
+          (remove-hook 'org-roam-post-node-insert-hook #'on-post-insert))))))
+
+(defun or-struktur-view-insert-child ()
+  "Insert child of current headline."
+  (interactive)
+  (or-struktur-view-insert-
+   (org-insert-heading)
+   (org-do-demote)))
+
+(defun or-struktur-view-insert-sibling ()
+  "Insert sibling of current headline."
+  (interactive)
+  (or-struktur-view-insert-
+   (org-insert-heading)))
+
+(defun or-struktur-view-do-headline-demote ()
+  "Demote current headline."
+  (interactive)
+  (or-struktur-view--modify-subtree (org-do-demote)))
+
+(defun or-struktur-view-do-headline-promote ()
+  "Promote current headline."
+  (interactive)
+  (or-struktur-view--modify-subtree (org-do-promote)))
+
+(defun or-struktur-view-do-subtree-demote ()
+  "Demote current subtree."
+  (interactive)
+  (or-struktur-view--modify-subtree (org-demote-subtree)))
+
+(defun or-struktur-view-do-subtree-promote ()
+  "Promote current subtree."
+  (interactive)
+  (or-struktur-view--modify-subtree (org-promote-subtree)))
+
+(defun or-struktur-view-do-subtree-move-down ()
+  "Move down current subtree."
+  (interactive)
+  (or-struktur-view--modify-subtree (org-move-subtree-down)))
+
+(defun or-struktur-view-do-subtree-move-up ()
+  "Move up current subtree."
+  (interactive)
+  (or-struktur-view--modify-subtree (org-move-subtree-up)))
+
+(defun or-struktur-view-do-subtree-cut ()
+  "Cut subtree at point."
+  (interactive)
+  (or-struktur-view--modify-subtree
+   (org-back-to-heading)
+   (org-cut-subtree)))
+
+(defun or-struktur-view-do-subtree-paste-as-sibling ()
+  "Paste subtree most recently cut."
+  (interactive)
+  (or-struktur-view--modify-subtree
+   (org-back-to-heading)
+   (org-paste-subtree '(4))))
+
+(defun or-struktur-view-do-subtree-paste-as-child ()
+  "Paste subtree most recently cut."
+  (interactive)
+  (or-struktur-view--modify-subtree
+   (org-back-to-heading)
+   (org-paste-subtree '(16))))
+
+(defun or-struktur-view-edit-link-desc ()
+  "Edit link description."
+  (interactive)
+  (or-struktur-view--modify-subtree
+   (when-let*
+       ((lnk (or-struktur-view--link))
+        (type (org-element-property :type lnk))
+        (id (and (equal type "id") (org-element-property :path lnk)))
+        (beg (org-element-property :begin lnk))
+        (end (org-element-property :end lnk))
+        (desc (buffer-substring-no-properties
+               (org-element-property :contents-begin lnk)
+               (org-element-property :contents-end lnk)))
+        (node (org-roam-node-from-id id))
+        (titles (cons (org-roam-node-title node) (org-roam-node-aliases node)))
+        (desc (completing-read "Change description: " titles nil nil desc)))
+     (goto-char beg)
+     (delete-region beg end)
+     (insert (format "[[%s:%s][%s]]" type id desc)))
+   (or-struktur-view-tags-refresh)
+   (move-beginning-of-line 1)))
+
+(defun or-struktur-view-edit ()
+  "Edit strukturzettel node as regular Org buffer."
+  (interactive)
+  (when-let*
+      ((pos (point))
+       (node (org-roam-node-at-point))
+       (buf (progn (org-roam-node-visit node)
+                   (get-file-buffer (org-roam-node-file node)))))
+    (with-current-buffer buf
+      (goto-char pos)
+      (org-fold-show-context)
+      (recenter))))
+
+;;; Strukturzettel Window Management
+
+(defun or-struktur-view-switch-strukturzettel ()
+  "Switch to different strukturzettel node."
+  (interactive)
+  (when-let* ((node (or-struktur-sz-select)))
+    (when-let* ((win (or-struktur-view--window)))
+      (delete-window win))
+    (select-window (or-struktur-view--display-indirect-buffer node)
+                   'norecord)))
+
+;;;###autoload
+(defun or-struktur-view-show ()
+  "Show sturkturzettel view."
+  (interactive)
+  (or-struktur-view--show 'select))
+
+;;;###autoload
+(defun or-struktur-view-hide ()
+  "Hide sturkturzettel view."
+  (interactive)
+  (or-struktur-view--hide))
+
+;;;###autoload
+(defun or-struktur-view-toggle ()
+  "Toggle strukturzettel view."
+  (interactive)
+  (unless (or-struktur-view-hide)
+    (or-struktur-view-show)))
+
+(defun or-struktur-view-top ()
+  "Layout strukturzettel view to top."
+  (interactive)
+  (or-struktur-view--window-side 'top))
+
+(defun or-struktur-view-right ()
+  "Layout strukturzettel view to right."
+  (interactive)
+  (or-struktur-view--window-side 'right))
+
+(defun or-struktur-view-bottom ()
+  "Layout strukturzettel view to bottom."
+  (interactive)
+  (or-struktur-view--window-side 'bottom))
+
+(defun or-struktur-view-left ()
+  "Layout strukturzettel view to left."
+  (interactive)
+  (or-struktur-view--window-side 'left))
+
+(defun or-struktur-view-expand ()
+  "Expand side window."
+  (interactive)
+  (or-struktur-view--window-expand))
+
+(defvar or-struktur-view--layout nil
+  "List of layout configuration, i.e., `(SIDE . SIZE)'.
+Top entry is the current or most recently used layout.")
+
+(defun or-struktur-view--layout (&optional side size)
+  "Get current layout, setting to `(SIDE . SIZE)' if given."
+  (setq side (if (and (null side) (null or-struktur-view--layout))
+                 or-struktur-view-layout side))
+  (when side
+    (unless (member side '(top right bottom left))
+      (error "SIDE must be one of top, right, bottom, left"))
+    (setq or-struktur-view--layout
+          (if-let* ((elmt (assq side or-struktur-view--layout)))
+              (pcase-let* ((`(,_ . ,old-size) elmt))
+                (cons (cons side (or size old-size))
+                      (delq elmt or-struktur-view--layout)))
+            (cons (cons side (funcall (if (member side '(left right))
+                                          #'caar #'cadr)
+                                      or-struktur-view-layout-sizes))
+                  or-struktur-view--layout))))
+  (car or-struktur-view--layout))
+
+(defun or-struktur-view--window ()
+  "Return strukturzettel window in use or nil."
+  (seq-find (lambda (win)
+              (when-let* ((buf (window-buffer win)))
+                (with-current-buffer buf
+                  (derived-mode-p 'or-struktur-view-mode))))
+            (window-list)))
+
+(defun or-struktur-view--window-side (side)
+  "Layout strukturzettel window to SIDE."
+  (when-let* ((win (or-struktur-view--window))
+              (buf (window-buffer win)))
+    (let ((pos (and (eq win (selected-window)) (point))))
+      (delete-window win)
+      (or-struktur-view--layout side)
+      (setq win (or-struktur-view--display-buffer buf))
+      (when pos
+        (select-window win 'norecord)
+        (goto-char pos)
+        ;; (org-reveal)
+        (recenter)))))
+
+(defun or-struktur-view--window-expand ()
+  "Expand window size."
+  (when-let* ((win (or-struktur-view--window))
+              (buf (window-buffer win)))
+    (pcase-let*
+        ((`(,side . ,size) (or-struktur-view--layout))
+         (sizes (funcall (if (member side '(left right)) #'car #'cdr)
+                         or-struktur-view-layout-sizes))
+         (index (mod (1+ (or (or-struktur--list-binary-search-ceil sizes size)
+                             (1- (length sizes))))
+                     (length sizes))))
+      (or-struktur-view--layout side (nth index sizes))
+      (or-struktur-view--display-buffer buf))))
+
+(defun or-struktur-view--display-buffer (buffer)
+  "Display strukturzettel indirect BUFFER on WIN-SIDE with WIN-SIZE.
+This function returns the newly created side window."
+  (pcase-let*
+      ((`(,side . ,size) (or-struktur-view--layout))
+       (win-size (cons (if (member side '(top bottom))
+                           'window-height 'window-width)
+                       size)))
+    (let ((win (display-buffer buffer
+                               `(display-buffer-in-side-window
+                                 . ((side . ,side)
+                                    (slot . 0) ; TODO: Ensure no conflict
+                                    ,win-size
+                                    (dedicated . t)
+                                    (window-parameters
+                                     . ((no-delete-other-windows . t)
+                                        (no-other-window . t)
+                                        (mode-line-format . none)
+                                        (dedicated . t))))))))
+      (let* ((end (window-end win t))
+             (beg (window-start win)))
+        (message "Strukturzettel shown in %s (%s, %s)" win beg end))
+      win)))
+
+(defun or-struktur-view--display-indirect-buffer (node)
+  "Display indirect buffer of NODE in view mode."
+  (let* ((name (format "%s<%s::%s>"
+                       or-struktur-view--buffer-name
+                       (org-roam-node-id node)
+                       (org-roam-node-title node)))
+         (file (org-roam-node-file node))
+         (pos (org-roam-node-point node))
+         buf offset)
+    (if (get-buffer name)
+        (setq buf (get-buffer name))
+      (setq buf (make-indirect-buffer (find-file-noselect file) name t))
+      (with-current-buffer buf
+        (goto-char pos)
+        (pcase-let*
+            ((`(,beg . ,end)
+              (if (org-at-heading-p)
+                  (let* ((elem (org-element-at-point))
+                         (end (org-element-property :end elem))
+                         (beg (save-excursion
+                                (org-next-visible-heading 1)
+                                (point))))
+                    (cons beg end))
+                (org-next-visible-heading 1)
+                (cons (point) (point-max)))))
+          (narrow-to-region beg end)
+          (or-struktur-view-mode)
+          (font-lock-fontify-buffer)) ; `font-lock-flush'?ormat
+
+        (setq header-line-format
+              (propertize (format "%s" (org-roam-node-title node))
+                          'face 'header-line
+                          'cursor-intangible t))))
+    (or-struktur-view--display-buffer buf)))
+
+(defun or-struktur-view--shown-p (id)
+  "Return the view window if node with ID is already shown."
+  (when-let* ((win (or-struktur-view--window)))
+    (and (eq (buffer-base-buffer (window-buffer win))
+             (find-buffer-visiting
+              (org-roam-node-file
+               (org-roam-node-from-id id))))
+         win)))
+
+(defun or-struktur-view--show (&optional select)
+  "Show side view window with strukturzettel.
+Which strukturzettel buffer gets displayed will be based on the object
+at point, in order of precedence:
+
+  - If the point is at an Org link which references an `org-roam' node
+    belonging in a strukturzettel, that structurzettel will be displayed
+    with the point on the link referencing the same note.
+
+  - If the at-point node is a strukturzettel (visited as a base buffer),
+    its indirect buffer will be displayed with the current point
+    preserved.
+
+  - If the at-point node is associated with a strukturzettel, that
+    strukturzettel will be displayed with the point on the line
+    referencing the node.
+
+  - If none of the above is true, the user will be prompted for a
+    strukturzettel to display.
+
+If SELECT is non-nil, select the window after it becomes visible."
+  (let ((win (or-struktur-view--window))
+        sz-node sz-line)
+    ;; Look for target strukturzettel buffer and its line number for the
+    ;; node at point.
+    (when-let* ((node (and (derived-mode-p 'org-mode)
+                           (org-roam-node-at-point))))
+      (if (or-struktur-sz-p node)
+          (progn
+            (setq sz-node node
+                  sz-line (line-number-at-pos (point) t))
+            (unless (or-struktur-view--shown-p (org-roam-node-id sz-node))
+              (when win
+                (delete-window win)
+                (setq win nil))))
+        (when-let*
+            ((items
+              (or (or-struktur-sid--from-id
+                   (when-let*
+                       ((elmt (org-element-context))
+                        (lnk (and (eq (org-element-type elmt) 'link) elmt))
+                        (type (org-element-property :type lnk))
+                        (path (and (string= type "id")
+                                   (org-element-property :path lnk))))
+                     (car (split-string path "::" t)))
+                   'extra)
+                  (or-struktur-sid--from-id (org-roam-node-id node) 'extra))))
+          (unless
+              (seq-find
+               (lambda (item)
+                 (pcase-let* ((`(,fz ,sz-id ,pos) item))
+                   (when (and win (or-struktur-view--shown-p sz-id))
+                     ;; The target buffer is already displayed in side
+                     ;; window, so just get the target line in it.
+                     (setq sz-node (org-roam-node-from-id sz-id)
+                           sz-line pos)
+                     t)))
+               items)
+            ;; The target buffer is yet to be displayed, so pick one,
+            ;; display in side window and record the target line in the
+            ;; buffer.
+            (pcase-let* ((`(,fz ,sz-id ,pos) (car items)))
+              (setq sz-node (org-roam-node-from-id sz-id)
+                    sz-line pos)
+              (unless (or-struktur-view--shown-p sz-id)
+                (when win
+                  (delete-window win)
+                  (setq win nil))))))))
+
+    (unless win
+      (setq win
+            (if sz-node
+                (or-struktur-view--display-indirect-buffer sz-node)
+              (if-let* ((buf (cl-find-if
+                              (lambda (buf)
+                                (and (buffer-live-p buf)
+                                     (string-prefix-p or-struktur-view--buffer-name
+                                                      (buffer-name buf))))
+                              (buffer-list))))
+                  (or-struktur-view--display-buffer buf)
+                (or-struktur-view--display-indirect-buffer (or-struktur-sz-select))))))
+
+    (when sz-line
+      (with-selected-window win
+        (let ((min-line (line-number-at-pos (point-min) t))
+              (max-line (line-number-at-pos (point-max) t)))
+          (if (<= min-line sz-line max-line)
+              (goto-line sz-line)))
+        ;; (org-reveal 'siblings)
+        (recenter)))
+
+    (when (and select win)
+      (select-window win 'norecord))))
+
+(defun or-struktur-view--hide ()
+  "Hide strukturzettel window.
+This function returns non-nil if a strukturzettel window exists and is deleted."
+  (when-let* ((win (or-struktur-view--window)))
+    (delete-window win)
+    t))
+
+(provide 'or-struktur)
+;;; or-struktur.el ends here
