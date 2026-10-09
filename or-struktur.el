@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.30.1
+;; Version: 0.31.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -76,6 +76,14 @@ Examples:
   - (\"%d\" \"-%s\") will render like '2-d3a1' (second digit preceded by a
     hyphen, with the rest alternating)."
   :type '(list string)
+  :group 'or-struktur)
+
+(defcustom or-struktur-overlay-rotate-interval 2.0
+  "Interval in seconds between overlay text rotations.
+When set to a positive number (integer or float), overlays rotate at
+this frequency. When set to nil, automatic rotation is disabled."
+  :type '(choice (const :tag "Disabled" nil)
+                 (number :tag "Interval (seconds)"))
   :group 'or-struktur)
 
 (defcustom or-struktur-view-layout 'top
@@ -488,45 +496,82 @@ If value is nil, returns DEFAULT."
 
 ;;; FID Overlays
 
+(defvar or-struktur--ov-rotating-overlays nil
+  "List of currently active rotating overlays.")
+
+(defvar or-struktur--ov-rotating-timer nil
+  "Single global timer controlling overlay rotation.")
+
+(defun or-struktur--ov-put-text (ov text)
+  "Add TEXT to overlay OV."
+  (let ((space (propertize " " 'face '( :inherit or-struktur-overlay :height 0.25 ))))
+    (overlay-put ov or-struktur-fid-text-placement
+                 (pcase or-struktur-fid-text-placement
+                   ('before-string (concat text space))
+                   ('after-string (concat space text))))))
+
+(defun or-struktur--ov-rotating-tick ()
+  "Advance overlay text and clean up dead ones."
+  (setq or-struktur--ov-rotating-overlays
+        (cl-delete-if-not
+         (lambda (ov)
+           (if (overlay-buffer ov)
+               (let* ((texts (overlay-get ov 'rot-texts))
+                      (idx (overlay-get ov 'rot-idx))
+                      (next-idx (mod (1+ idx) (length texts)))
+                      (next-text (nth next-idx texts)))
+                 (overlay-put ov 'rot-idx next-idx)
+                 (or-struktur--ov-put-text ov next-text)
+                 t)
+             nil))
+         or-struktur--ov-rotating-overlays))
+  (when (and (null or-struktur--ov-rotating-overlays) or-struktur--ov-rotating-timer)
+    (cancel-timer or-struktur--ov-rotating-timer)
+    (setq or-struktur--ov-rotating-timer nil)))
+
 (defun or-struktur--ov-put (beg end text)
   "Add TEXT overlay for content from BEG to END."
-  (let* ((ov (make-overlay beg end))
-         (space (propertize " "
-                            'face '( :inherit or-struktur-overlay
-                                     :height 0.25 )))
-         (text (pcase or-struktur-fid-text-placement
-                 ('before-string (concat text space))
-                 ('after-string (concat space text)))))
-    (overlay-put ov or-struktur-fid-text-placement text)
+  (let ((ov (make-overlay beg end)))
     (overlay-put ov 'category 'or-struktur)
-    (overlay-put ov 'evaporate t)))
+    (overlay-put ov 'evaporate t)
+    (if (stringp text)
+        (or-struktur--ov-put-text ov text)
+      (overlay-put ov 'rot-texts text)
+      (overlay-put ov 'rot-idx 0)
+      (or-struktur--ov-put-text ov (car text))
+      (push ov or-struktur--ov-rotating-overlays)
+      (unless or-struktur--ov-rotating-timer
+        (setq or-struktur--ov-rotating-timer
+              (run-with-timer or-struktur-overlay-rotate-interval
+                              or-struktur-overlay-rotate-interval
+                              #'or-struktur--ov-rotating-tick))))))
 
-(defun or-struktur--ov-format (id)
-  "Render FIDs for node ID as string for overlay."
-  (when-let* ((fids (or-struktur--db-id2fid-get id)))
-    (string-join
-     (mapcar
-      (lambda (fid)
-        (let ((text-wrapper
-               (if or-struktur-fid-text-wrapper
-                   (or (cdr (or-struktur--alist-binary-search-floor
-                             or-struktur-fid-text-wrapper--alist fid))
-                       or-struktur-fid-text-wrapper)
-                 "%s"))
-              (face (append '(:inherit or-struktur-overlay)
-                            (cdr (or-struktur--alist-binary-search-floor
-                                  or-struktur--ov-faces fid)))))
-          (propertize (format text-wrapper (or-struktur-fid--render fid))
-                      'face face)))
-      fids)
-     (string ?\u200B))))
+(defun or-struktur--ov-fids (node-id)
+  "Render FIDs of NODE-ID as a string or a list of strings for overlays."
+  (when-let*
+      ((strs
+        (mapcar
+         (lambda (fid)
+           (let ((fmt (if or-struktur-fid-text-wrapper
+                          (or (cdr (or-struktur--alist-binary-search-floor
+                                    or-struktur-fid-text-wrapper--alist fid))
+                              or-struktur-fid-text-wrapper)
+                        "%s"))
+                 (face (append '(:inherit or-struktur-overlay)
+                               (cdr (or-struktur--alist-binary-search-floor
+                                     or-struktur--ov-faces fid)))))
+             (propertize (format fmt (or-struktur-fid--render fid)) 'face face)))
+         (or-struktur--db-id2fid-get node-id))))
+    (if or-struktur-overlay-rotate-interval
+        strs
+      (string-join strs (string ?\u200B)))))
 
 (defun or-struktur--ov-render-in-title ()
   "Render FID overlays in document title.
 The title is obtained from `#+title:'."
   (goto-char (point-min))     ; this respects narrowing
   (when-let* ((node (org-roam-node-at-point))
-              (s (or-struktur--ov-format (org-roam-node-id node))))
+              (s (or-struktur--ov-fids (org-roam-node-id node))))
     (when (re-search-forward "^#\\+TITLE:[ \t]*\\(.*\\)$" (point-max) t)
       (or-struktur--ov-put (match-beginning 1) (match-end 1) s))))
 
@@ -536,7 +581,7 @@ IDs are extracted from headline properties."
   (org-element-map (org-element-parse-buffer) 'headline
     (lambda (elmt)
       (when-let* ((id (org-element-property :ID elmt))
-                  (s (or-struktur--ov-format id))
+                  (s (or-struktur--ov-fids id))
                   (beg (org-element-property :title-begin elmt))
                   (end (org-element-property :title-end elmt)))
         (or-struktur--ov-put beg end s)))))
@@ -545,7 +590,7 @@ IDs are extracted from headline properties."
   "Render FID overlay for link ELMT."
   (when-let* ((id (and (string= (org-element-property :type elmt) "id")
                        (org-element-property :path elmt)))
-              (s (or-struktur--ov-format id))
+              (s (or-struktur--ov-fids id))
               (beg (org-element-property :begin elmt))
               (end (org-element-property :end elmt)))
     (or-struktur--ov-put beg end s)))
