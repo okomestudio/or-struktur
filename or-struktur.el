@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.31.2
+;; Version: 0.32.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -726,9 +726,8 @@ IDs are extracted from headline properties."
 ;;; Strukturzettel (SZ) Nodes
 
 (defun or-struktur-sz-p (&optional node)
-  "Return non-nil if NODE is strukturzettel node.
-A strukturzettel is defined as an Org document with one of its file tags being
-`or-struktur-sz-tag'."
+  "Return non-nil if NODE is a SZ node.
+A SZ node is defined as an org-roam node tagged with `or-struktur-sz-tag'."
   (when-let* ((node (or node (org-roam-node-at-point)))
               (tags (org-roam-node-tags node)))
     (member or-struktur-sz-tag tags)))
@@ -1014,18 +1013,22 @@ Returns one of:
 
 (add-hook 'org-tab-first-hook #'or-struktur-view-cycle)
 
+(defun or-struktur-view--sz-indirect-buffer-p (buffer)
+  "Return non-nil if BUFFER is an indirect buffer of SZ."
+  (string-prefix-p or-struktur-view--buffer-name (buffer-name buffer)))
+
 (defun or-struktur-view--on-capture-before-finalize ()
   (when-let*
       ((buf (and (bound-and-true-p org-capture-plist)
                  (eq (plist-get org-capture-plist :finalize) 'insert-link)
                  (plist-get org-capture-plist :original-buffer)))
-       (_ (string-prefix-p or-struktur-view--buffer-name (buffer-name buf))))
+       (_ (or-struktur-view--sz-indirect-buffer-p buf)))
     (with-current-buffer buf
       (read-only-mode -1))))
 
 (defun or-struktur-view--on-capture-after-finalize ()
   (when-let* ((buf (current-buffer))
-              (_ (string-prefix-p or-struktur-view--buffer-name (buffer-name buf)))
+              (_ (or-struktur-view--sz-indirect-buffer-p buf))
               (r-beg (save-excursion (beginning-of-line) (point)))
               (r-end (save-excursion (end-of-line) (point)))
               (base-buf (buffer-base-buffer)))
@@ -1536,11 +1539,10 @@ Top entry is the current or most recently used layout.")
   (car or-struktur-view--layout))
 
 (defun or-struktur-view--window ()
-  "Return strukturzettel window in use or nil."
+  "Return the SZ window in use or nil."
   (seq-find (lambda (win)
               (when-let* ((buf (window-buffer win)))
-                (with-current-buffer buf
-                  (derived-mode-p 'or-struktur-view-mode))))
+                (or-struktur-view--sz-indirect-buffer-p buf)))
             (window-list)))
 
 (defun or-struktur-view--window-side (side)
@@ -1572,28 +1574,24 @@ Top entry is the current or most recently used layout.")
       (or-struktur-view--display-buffer buf))))
 
 (defun or-struktur-view--display-buffer (buffer)
-  "Display strukturzettel indirect BUFFER on WIN-SIDE with WIN-SIZE.
-This function returns the newly created side window."
+  "Display SZ indirect BUFFER in a newly created side window.
+The window is configured with WIN-SIDE and WIN-SIZE."
   (pcase-let*
       ((`(,side . ,size) (or-struktur-view--layout))
        (win-size (cons (if (member side '(top bottom))
                            'window-height 'window-width)
                        size)))
-    (let ((win (display-buffer buffer
-                               `(display-buffer-in-side-window
-                                 . ((side . ,side)
-                                    (slot . 0) ; TODO: Ensure no conflict
-                                    ,win-size
-                                    (dedicated . t)
-                                    (window-parameters
-                                     . ((no-delete-other-windows . t)
-                                        (no-other-window . t)
-                                        (mode-line-format . none)
-                                        (dedicated . t))))))))
-      (let* ((end (window-end win t))
-             (beg (window-start win)))
-        (message "Strukturzettel shown in %s (%s, %s)" win beg end))
-      win)))
+    (display-buffer buffer
+                    `(display-buffer-in-side-window
+                      . ((side . ,side)
+                         (slot . 0) ; TODO: Ensure no conflict
+                         ,win-size
+                         (dedicated . t)
+                         (window-parameters
+                          . ((no-delete-other-windows . t)
+                             (no-other-window . t)
+                             (mode-line-format . none)
+                             (dedicated . t))))))))
 
 (defun or-struktur-view--display-indirect-buffer (node)
   "Display indirect buffer of NODE in view mode."
@@ -1630,103 +1628,73 @@ This function returns the newly created side window."
                           'cursor-intangible t))))
     (or-struktur-view--display-buffer buf)))
 
-(defun or-struktur-view--shown-p (id)
-  "Return the view window if node with ID is already shown."
-  (when-let* ((win (or-struktur-view--window)))
+(defun or-struktur-view--shown-p (sz-id)
+  "Return the view window if the node with SZ-ID is already shown."
+  (when-let* ((win (or-struktur-view--window))
+              (file (org-roam-node-file (org-roam-node-from-id sz-id))))
     (and (eq (buffer-base-buffer (window-buffer win))
-             (find-buffer-visiting
-              (org-roam-node-file
-               (org-roam-node-from-id id))))
+             (find-buffer-visiting file))
          win)))
 
 (defun or-struktur-view--show (&optional select)
-  "Show side view window with strukturzettel.
-Which strukturzettel buffer gets displayed will be based on the object
-at point, in order of precedence:
+  "Show the side view window displaying an SZ (indirect) buffer.
+If SELECT is non-nil, the side window will be made current.
 
-  - If the point is at an Org link which references an `org-roam' node
-    belonging in a strukturzettel, that structurzettel will be displayed
-    with the point on the link referencing the same note.
+The SZ buffer shown will be based on the object at point. In order of
+precedence:
 
-  - If the at-point node is a strukturzettel (visited as a base buffer),
-    its indirect buffer will be displayed with the current point
-    preserved.
+  - If the point is at an Org link referenced by a node in SZ, that SZ
+    will be shown, with the point on that link.
 
-  - If the at-point node is associated with a strukturzettel, that
-    strukturzettel will be displayed with the point on the line
-    referencing the node.
+  - If the node at point is an SZ node (visited in a base buffer), its
+    indirect buffer will be shown.
 
-  - If none of the above is true, the user will be prompted for a
-    strukturzettel to display.
-
-If SELECT is non-nil, select the window after it becomes visible."
-  (let ((win (or-struktur-view--window))
-        sz-node sz-line)
-    ;; Look for target strukturzettel buffer and its line number for the
-    ;; node at point.
-    (when-let* ((node (and (derived-mode-p 'org-mode)
-                           (org-roam-node-at-point))))
-      (if (or-struktur-sz-p node)
-          (progn
-            (setq sz-node node
-                  sz-line (line-number-at-pos (point) t))
-            (unless (or-struktur-view--shown-p (org-roam-node-id sz-node))
-              (when win
-                (delete-window win)
-                (setq win nil))))
+  - If none of the above is true, the user will be prompted for an SZ
+    node to display."
+  (let* ((win (or-struktur-view--window))
+         (node (and (derived-mode-p 'org-mode) (org-roam-node-at-point)))
+         sz-node sz-line target-id)
+    (when node
+      (if (and (or-struktur-sz-p node) (not (or-struktur-node-has-fid-p node)))
+          (setq sz-node node
+                sz-line (line-number-at-pos nil t)
+                target-id (org-roam-node-id node))
         (when-let*
-            ((items
-              (or (or-struktur-fid--from-id
-                   (when-let*
-                       ((elmt (org-element-context))
-                        (lnk (and (eq (org-element-type elmt) 'link) elmt))
-                        (type (org-element-property :type lnk))
-                        (path (and (string= type "id")
-                                   (org-element-property :path lnk))))
-                     (car (split-string path "::" t)))
-                   'extra)
-                  (or-struktur-fid--from-id (org-roam-node-id node) 'extra))))
-          (unless
-              (seq-find
-               (lambda (item)
-                 (pcase-let* ((`(,fid ,sz-id ,line-no) item))
-                   (when (and win (or-struktur-view--shown-p sz-id))
-                     ;; The target buffer is already displayed in side
-                     ;; window, so just get the target line in it.
-                     (setq sz-node (org-roam-node-from-id sz-id)
-                           sz-line line-no)
-                     t)))
-               items)
-            ;; The target buffer is yet to be displayed, so pick one,
-            ;; display in side window and record the target line in the
-            ;; buffer.
-            (pcase-let* ((`(,fid ,sz-id ,line-no) (car items)))
-              (setq sz-node (org-roam-node-from-id sz-id)
-                    sz-line line-no)
-              (unless (or-struktur-view--shown-p sz-id)
-                (when win
-                  (delete-window win)
-                  (setq win nil))))))))
+            ((node-id
+              (or (let ((elmt (org-element-context)))
+                    (when (and (eq (org-element-type elmt) 'link)
+                               (equal (org-element-property :type elmt) "id"))
+                      (car (split-string (org-element-property :path elmt) "::" t))))
+                  (org-roam-node-id node)))
+             (items (or-struktur-fid--from-id node-id t))
+             (matched (or (cl-find-if (pcase-lambda (`(,_ ,sz-id ,_))
+                                        (and win (or-struktur-view--shown-p sz-id)))
+                                      items)
+                          (car items))))
+          (pcase-let* ((`(,_ ,sz-id ,line-no) matched))
+            (setq sz-node (org-roam-node-from-id sz-id)
+                  sz-line line-no
+                  target-id sz-id)))))
+
+    (when (and win target-id (not (or-struktur-view--shown-p target-id)))
+      (delete-window win)
+      (setq win nil))
 
     (unless win
       (setq win
-            (if sz-node
-                (or-struktur-view--display-indirect-buffer sz-node)
-              (if-let* ((buf (cl-find-if
-                              (lambda (buf)
-                                (and (buffer-live-p buf)
-                                     (string-prefix-p or-struktur-view--buffer-name
-                                                      (buffer-name buf))))
-                              (buffer-list))))
-                  (or-struktur-view--display-buffer buf)
-                (or-struktur-view--display-indirect-buffer (or-struktur-sz-select))))))
+            (if-let* ((buf (and (null sz-node)
+                                (cl-find-if #'or-struktur-view--sz-indirect-buffer-p
+                                            (buffer-list)))))
+                (or-struktur-view--display-buffer buf)
+              (or-struktur-view--display-indirect-buffer
+               (or sz-node (or-struktur-sz-select))))))
 
     (when sz-line
       (with-selected-window win
-        (let ((min-line (line-number-at-pos (point-min) t))
-              (max-line (line-number-at-pos (point-max) t)))
-          (if (<= min-line sz-line max-line)
-              (goto-line sz-line)))
+        (when (<= (line-number-at-pos (point-min) t)
+                  sz-line
+                  (line-number-at-pos (point-max) t))
+          (goto-line sz-line))
         ;; (org-reveal 'siblings)
         (recenter)))
 
