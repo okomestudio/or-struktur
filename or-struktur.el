@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.31.1
+;; Version: 0.31.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -217,32 +217,38 @@ Either nil or `minibuffer' is allowed."
   (let ((inhibit-message t))
     (apply #'message _rest)))
 
-(defun or-struktur--alist-binary-search-floor (alist key)
-  "Return ALIST element whose key is floor of KEY."
-  (let* ((left 0)
-         (right (1- (length alist)))
-         result)
+(defun or-struktur--alist-floor (alist key &optional less-fun eq-fun)
+  "Return an ALIST entry whose key is the floor of KEY.
+Comparator functions used for binary search can be customized using
+LESS-FUN (default `string<') and EQ-FUN (`equal')."
+  (let ((less-fun (or less-fun #'string<))
+        (eq-fun (or eq-fun #'equal))
+        (left 0)
+        (right (1- (length alist)))
+        result)
     (while (<= left right)
       (let* ((mid (+ left (/ (- right left) 2)))
              (entry (nth mid alist))
              (val (car entry)))
         (cond
-         ((or (equal val key) (or-struktur-fid--less val key))
+         ((or (funcall eq-fun val key) (funcall less-fun val key))
           (setq result entry
                 left (1+ mid)))
          (t (setq right (1- mid))))))
     result))
 
-(defun or-struktur--list-binary-search-ceil (lis key)
-  "Return list, LIS, index of element whose value is ceil of KEY."
-  (let* ((left 0)
-         (right (1- (length lis)))
-         result)
+(defun or-struktur--list-ceil (vals key &optional less-fun)
+  "Return the index in the list VALS whose value is the ceil of KEY.
+LESS-FUN results to `<'."
+  (let ((less-fun (or less-fun #'<))
+        (left 0)
+        (right (1- (length vals)))
+        result)
     (while (<= left right)
       (let* ((mid (+ left (/ (- right left) 2)))
-             (elmt (nth mid lis)))
+             (elmt (nth mid vals)))
         (cond
-         ((not (or-struktur-fid--less elmt key))
+         ((not (funcall less-fun elmt key))
           (setq result mid
                 right (1- mid)))
          (t (setq left (1+ mid))))))
@@ -494,130 +500,11 @@ If value is nil, returns DEFAULT."
         (string-match or-struktur-skipped-headline
                       (org-element-property :raw-value elmt)))))))
 
-;;; FID Overlays
-
-(defvar or-struktur--ov-rotating-overlays nil
-  "List of currently active rotating overlays.")
-
-(defvar or-struktur--ov-rotating-timer nil
-  "Single global timer controlling overlay rotation.")
-
-(defun or-struktur--ov-put-text (ov text)
-  "Add TEXT to overlay OV."
-  (let ((space (propertize " " 'face '( :inherit or-struktur-overlay :height 0.25 ))))
-    (overlay-put ov or-struktur-fid-text-placement
-                 (pcase or-struktur-fid-text-placement
-                   ('before-string (concat text space))
-                   ('after-string (concat space text))))))
-
-(defun or-struktur--ov-rotating-tick ()
-  "Advance overlay text and clean up dead ones."
-  (setq or-struktur--ov-rotating-overlays
-        (cl-delete-if-not
-         (lambda (ov)
-           (if (overlay-buffer ov)
-               (let* ((texts (overlay-get ov 'rot-texts))
-                      (idx (overlay-get ov 'rot-idx))
-                      (next-idx (mod (1+ idx) (length texts)))
-                      (next-text (nth next-idx texts)))
-                 (overlay-put ov 'rot-idx next-idx)
-                 (or-struktur--ov-put-text ov next-text)
-                 t)
-             nil))
-         or-struktur--ov-rotating-overlays))
-  (when (and (null or-struktur--ov-rotating-overlays) or-struktur--ov-rotating-timer)
-    (cancel-timer or-struktur--ov-rotating-timer)
-    (setq or-struktur--ov-rotating-timer nil)))
-
-(defun or-struktur--ov-put (beg end text)
-  "Add TEXT overlay for content from BEG to END."
-  (let ((ov (make-overlay beg end)))
-    (overlay-put ov 'category 'or-struktur)
-    (overlay-put ov 'evaporate t)
-    (if (stringp text)
-        (or-struktur--ov-put-text ov text)
-      (overlay-put ov 'rot-texts text)
-      (overlay-put ov 'rot-idx 0)
-      (or-struktur--ov-put-text ov (car text))
-      (push ov or-struktur--ov-rotating-overlays)
-      (unless or-struktur--ov-rotating-timer
-        (setq or-struktur--ov-rotating-timer
-              (run-with-timer or-struktur-overlay-rotate-interval
-                              or-struktur-overlay-rotate-interval
-                              #'or-struktur--ov-rotating-tick))))))
-
-(defun or-struktur--ov-fids (node-id)
-  "Render FIDs of NODE-ID as a string or a list of strings for overlays."
-  (when-let*
-      ((strs
-        (mapcar
-         (lambda (fid)
-           (let ((fmt (if or-struktur-fid-text-wrapper
-                          (or (cdr (or-struktur--alist-binary-search-floor
-                                    or-struktur-fid-text-wrapper--alist fid))
-                              or-struktur-fid-text-wrapper)
-                        "%s"))
-                 (face (append '(:inherit or-struktur-overlay)
-                               (cdr (or-struktur--alist-binary-search-floor
-                                     or-struktur--ov-faces fid)))))
-             (propertize (format fmt (or-struktur-fid--render fid)) 'face face)))
-         (or-struktur--db-id2fid-get node-id))))
-    (if or-struktur-overlay-rotate-interval
-        strs
-      (string-join strs (string ?\u200B)))))
-
-(defun or-struktur--ov-render-in-title ()
-  "Render FID overlays in document title.
-The title is obtained from `#+title:'."
-  (goto-char (point-min))     ; this respects narrowing
-  (when-let* ((node (org-roam-node-at-point))
-              (s (or-struktur--ov-fids (org-roam-node-id node))))
-    (when (re-search-forward "^#\\+TITLE:[ \t]*\\(.*\\)$" (point-max) t)
-      (or-struktur--ov-put (match-beginning 1) (match-end 1) s))))
-
-(defun or-struktur--ov-render-in-headlines ()
-  "Render FID overlays in headlines.
-IDs are extracted from headline properties."
-  (org-element-map (org-element-parse-buffer) 'headline
-    (lambda (elmt)
-      (when-let* ((id (org-element-property :ID elmt))
-                  (s (or-struktur--ov-fids id))
-                  (beg (org-element-property :title-begin elmt))
-                  (end (org-element-property :title-end elmt)))
-        (or-struktur--ov-put beg end s)))))
-
-(defun or-struktur--ov-render-link (elmt)
-  "Render FID overlay for link ELMT."
-  (when-let* ((id (and (string= (org-element-property :type elmt) "id")
-                       (org-element-property :path elmt)))
-              (s (or-struktur--ov-fids id))
-              (beg (org-element-property :begin elmt))
-              (end (org-element-property :end elmt)))
-    (or-struktur--ov-put beg end s)))
-
-(defun or-struktur--ov-remove (&optional beg end buffer)
-  "Remove FID overlays in BUFFER region from BEG to END."
-  (or-struktur--narrow-and-eval beg end buffer
-    (remove-overlays beg end 'category 'or-struktur)))
-
-(defun or-struktur--ov-render (&optional beg end buffer)
-  "Render FID overlays in BUFFER region from BEG to END."
-  (or-struktur--narrow-and-eval beg end buffer
-    (or-struktur--ov-render-in-title)
-    (or-struktur--ov-render-in-headlines)
-    (org-element-map (org-element-parse-buffer) 'link
-      #'or-struktur--ov-render-link)))
-
-(defun or-struktur--ov-refresh (&optional beg end buffer)
-  "Refresh FID overlays in BUFFER region from BEG to END."
-  (or-struktur--ov-remove beg end buffer)
-  (or-struktur--ov-render beg end buffer))
-
 ;;; FID (Folgezettel-like ID)
 
-;; An FID is an ID of an org-roam node assigned by its placement in a
-;; strukturzettel. The underlying data for FID is a list of integers,
-;; e.g., (2 3 5).
+;; An FID is an ID used for an org-roam node assigned through its
+;; placement within a SZ node. The underlying data for FID is a list of
+;; integers, e.g., (2 3 5).
 
 (defun or-struktur-fid--less (a b)
   "Return non-nil if FID A is less than B."
@@ -628,8 +515,15 @@ IDs are extracted from headline properties."
         (t (or-struktur-fid--less (cdr a) (cdr b)))))
 
 (defun or-struktur-fid--number-to-alpha (n)
-  "Convert positive N to alphabet representation.
-The return value is a string or nil if N is not a positive integer."
+  "Convert positive integer N to its alphabet representation for FID.
+This is for use with FIDs when numbers and alphabets are alternated,
+e.g., '1b3c'. For example,
+
+  - 1 = 'a'
+  - 26 = 'z'
+  - 27 = 'aa'
+
+The return value is a string, or nil if N is not a positive integer."
   (unless (and (integerp n) (> n 0))
     (error "N must be a positive integer"))
   (let ((result "")
@@ -644,7 +538,7 @@ The return value is a string or nil if N is not a positive integer."
 
 (defun or-struktur-fid--render (fid)
   "Render FID using preset format.
-The preset format is set with `or-struktur-fid-text-format'."
+The preset format is configured with `or-struktur-fid-text-format'."
   (string-join
    (cl-loop with (converter) = '(nil)
             for i below (length fid)
@@ -707,6 +601,127 @@ See `or-struktur--mapping-id2fid-get' for the meaning of EXTRA."
          (mapcar (lambda (fid)
                    (or-struktur-fid--get-children fid))
                  (or-struktur-fid--get-parents fid))))
+
+;;; FID Overlays
+
+(defvar or-struktur--ov-rotating-overlays nil
+  "List of currently active rotating overlays.")
+
+(defvar or-struktur--ov-rotating-timer nil
+  "Single global timer controlling overlay rotation.")
+
+(defun or-struktur--ov-put-text (ov text)
+  "Add TEXT to overlay OV."
+  (let ((space (propertize " " 'face '( :inherit or-struktur-overlay :height 0.25 ))))
+    (overlay-put ov or-struktur-fid-text-placement
+                 (pcase or-struktur-fid-text-placement
+                   ('before-string (concat text space))
+                   ('after-string (concat space text))))))
+
+(defun or-struktur--ov-rotating-tick ()
+  "Advance overlay text and clean up dead ones."
+  (setq or-struktur--ov-rotating-overlays
+        (cl-delete-if-not
+         (lambda (ov)
+           (if (overlay-buffer ov)
+               (let* ((texts (overlay-get ov 'rot-texts))
+                      (idx (overlay-get ov 'rot-idx))
+                      (next-idx (mod (1+ idx) (length texts)))
+                      (next-text (nth next-idx texts)))
+                 (overlay-put ov 'rot-idx next-idx)
+                 (or-struktur--ov-put-text ov next-text)
+                 t)
+             nil))
+         or-struktur--ov-rotating-overlays))
+  (when (and (null or-struktur--ov-rotating-overlays) or-struktur--ov-rotating-timer)
+    (cancel-timer or-struktur--ov-rotating-timer)
+    (setq or-struktur--ov-rotating-timer nil)))
+
+(defun or-struktur--ov-put (beg end text)
+  "Add TEXT overlay for content from BEG to END."
+  (let ((ov (make-overlay beg end)))
+    (overlay-put ov 'category 'or-struktur)
+    (overlay-put ov 'evaporate t)
+    (if (stringp text)
+        (or-struktur--ov-put-text ov text)
+      (overlay-put ov 'rot-texts text)
+      (overlay-put ov 'rot-idx 0)
+      (or-struktur--ov-put-text ov (car text))
+      (push ov or-struktur--ov-rotating-overlays)
+      (unless or-struktur--ov-rotating-timer
+        (setq or-struktur--ov-rotating-timer
+              (run-with-timer or-struktur-overlay-rotate-interval
+                              or-struktur-overlay-rotate-interval
+                              #'or-struktur--ov-rotating-tick))))))
+
+(defun or-struktur--ov-fids (node-id)
+  "Render FIDs of NODE-ID as a string or a list of strings for overlays."
+  (when-let*
+      ((strs
+        (mapcar
+         (lambda (fid)
+           (let ((fmt (if or-struktur-fid-text-wrapper
+                          (or (cdr (or-struktur--alist-floor
+                                    or-struktur-fid-text-wrapper--alist fid
+                                    #'or-struktur-fid--less))
+                              or-struktur-fid-text-wrapper)
+                        "%s"))
+                 (face (append '(:inherit or-struktur-overlay)
+                               (cdr (or-struktur--alist-floor
+                                     or-struktur--ov-faces fid
+                                     #'or-struktur-fid--less)))))
+             (propertize (format fmt (or-struktur-fid--render fid)) 'face face)))
+         (or-struktur--db-id2fid-get node-id))))
+    (if or-struktur-overlay-rotate-interval
+        strs
+      (string-join strs (string ?\u200B)))))
+
+(defun or-struktur--ov-render-in-title ()
+  "Render FID overlays in document title.
+The title is obtained from `#+title:'."
+  (goto-char (point-min))     ; this respects narrowing
+  (when-let* ((node (org-roam-node-at-point))
+              (s (or-struktur--ov-fids (org-roam-node-id node))))
+    (when (re-search-forward "^#\\+TITLE:[ \t]*\\(.*\\)$" (point-max) t)
+      (or-struktur--ov-put (match-beginning 1) (match-end 1) s))))
+
+(defun or-struktur--ov-render-in-headlines ()
+  "Render FID overlays in headlines.
+IDs are extracted from headline properties."
+  (org-element-map (org-element-parse-buffer) 'headline
+    (lambda (elmt)
+      (when-let* ((id (org-element-property :ID elmt))
+                  (s (or-struktur--ov-fids id))
+                  (beg (org-element-property :title-begin elmt))
+                  (end (org-element-property :title-end elmt)))
+        (or-struktur--ov-put beg end s)))))
+
+(defun or-struktur--ov-render-link (elmt)
+  "Render FID overlay for link ELMT."
+  (when-let* ((id (and (string= (org-element-property :type elmt) "id")
+                       (org-element-property :path elmt)))
+              (s (or-struktur--ov-fids id))
+              (beg (org-element-property :begin elmt))
+              (end (org-element-property :end elmt)))
+    (or-struktur--ov-put beg end s)))
+
+(defun or-struktur--ov-remove (&optional beg end buffer)
+  "Remove FID overlays in BUFFER region from BEG to END."
+  (or-struktur--narrow-and-eval beg end buffer
+    (remove-overlays beg end 'category 'or-struktur)))
+
+(defun or-struktur--ov-render (&optional beg end buffer)
+  "Render FID overlays in BUFFER region from BEG to END."
+  (or-struktur--narrow-and-eval beg end buffer
+    (or-struktur--ov-render-in-title)
+    (or-struktur--ov-render-in-headlines)
+    (org-element-map (org-element-parse-buffer) 'link
+      #'or-struktur--ov-render-link)))
+
+(defun or-struktur--ov-refresh (&optional beg end buffer)
+  "Refresh FID overlays in BUFFER region from BEG to END."
+  (or-struktur--ov-remove beg end buffer)
+  (or-struktur--ov-render beg end buffer))
 
 ;;; Strukturzettel (SZ) Nodes
 
@@ -1550,7 +1565,7 @@ Top entry is the current or most recently used layout.")
         ((`(,side . ,size) (or-struktur-view--layout))
          (sizes (funcall (if (member side '(left right)) #'car #'cdr)
                          or-struktur-view-layout-sizes))
-         (index (mod (1+ (or (or-struktur--list-binary-search-ceil sizes size)
+         (index (mod (1+ (or (or-struktur--list-ceil sizes size)
                              (1- (length sizes))))
                      (length sizes))))
       (or-struktur-view--layout side (nth index sizes))
