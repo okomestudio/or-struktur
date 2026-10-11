@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.32.1
+;; Version: 0.33.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -123,35 +123,43 @@ Either nil or `minibuffer' is allowed."
   :type 'number
   :group 'or-struktur)
 
-(defface or-struktur-level-1 '((t :inherit org-level-1 :height 1.0 :weight normal))
+(defface or-struktur-default '((t :height 1.0 :weight normal))
+  "Default face in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level '((t :inherit outline-1 :height 1.0 :weight normal))
+  "Base face for headlines in `or-struktur-view-mode'."
+  :group 'or-struktur)
+
+(defface or-struktur-level-1 '((t :inherit or-struktur-level))
   "Face for `org-level-1' in `or-struktur-view-mode'."
   :group 'or-struktur)
 
-(defface or-struktur-level-2 '((t :inherit org-level-2 :height 1.0 :weight normal))
+(defface or-struktur-level-2 '((t :inherit or-struktur-level))
   "Face for `org-level-2' in `or-struktur-view-mode'."
   :group 'or-struktur)
 
-(defface or-struktur-level-3 '((t :inherit org-level-3 :height 1.0 :weight normal))
+(defface or-struktur-level-3 '((t :inherit or-struktur-level))
   "Face for `org-level-3' in `or-struktur-view-mode'."
   :group 'or-struktur)
 
-(defface or-struktur-level-4 '((t :inherit org-level-4 :height 1.0 :weight normal))
+(defface or-struktur-level-4 '((t :inherit or-struktur-level))
   "Face for `org-level-4' in `or-struktur-view-mode'."
   :group 'or-struktur)
 
-(defface or-struktur-level-5 '((t :inherit org-level-5 :height 1.0 :weight normal))
+(defface or-struktur-level-5 '((t :inherit or-struktur-level))
   "Face for `org-level-5' in `or-struktur-view-mode'."
   :group 'or-struktur)
 
-(defface or-struktur-level-6 '((t :inherit org-level-6 :height 1.0 :weight normal))
+(defface or-struktur-level-6 '((t :inherit or-struktur-level))
   "Face for `org-level-6' in `or-struktur-view-mode'."
   :group 'or-struktur)
 
-(defface or-struktur-level-7 '((t :inherit org-level-7 :height 1.0 :weight normal))
+(defface or-struktur-level-7 '((t :inherit or-struktur-level))
   "Face for `org-level-7' in `or-struktur-view-mode'."
   :group 'or-struktur)
 
-(defface or-struktur-level-8 '((t :inherit org-level-8 :height 1.0 :weight normal))
+(defface or-struktur-level-8 '((t :inherit or-struktur-level))
   "Face for `org-level-8' in `or-struktur-view-mode'."
   :group 'or-struktur)
 
@@ -883,24 +891,23 @@ The function FILTER-FN takes an FID and returns related nodes."
   (make-local-variable 'default-input-method)
   (setq default-input-method nil)
   (or-struktur--disable-command 'or-struktur-view-mode
-                                #'toggle-input-method)
-
-  ;; Buffer-local face substitution
-  (setq-local face-remapping-alist
-              '((org-level-1 or-struktur-level-1)
-                (org-level-2 or-struktur-level-2)
-                (org-level-3 or-struktur-level-3)
-                (org-level-4 or-struktur-level-4)
-                (org-level-5 or-struktur-level-5)
-                (org-level-6 or-struktur-level-6)
-                (org-level-7 or-struktur-level-7)
-                (org-level-8 or-struktur-level-8))))
+                                #'toggle-input-method))
 
 (defun or-struktur-view--on-init ()
   (setq-local repeat-mode nil) ; this mode is sluggish
   (setq-local truncate-lines t)
   (setq-local org-use-speed-commands nil)
-  (text-scale-set -0.6)
+  ;; (text-scale-set -0.6)
+  (setq-local face-remapping-alist
+              '((default . or-struktur-default)
+                (org-level-1 . or-struktur-level-1)
+                (org-level-2 . or-struktur-level-2)
+                (org-level-3 . or-struktur-level-3)
+                (org-level-4 . or-struktur-level-4)
+                (org-level-5 . or-struktur-level-5)
+                (org-level-6 . or-struktur-level-6)
+                (org-level-7 . or-struktur-level-7)
+                (org-level-8 . or-struktur-level-8)))
 
   (or-struktur--hide-skipped-headlines)
 
