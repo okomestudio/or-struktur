@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.33.1
+;; Version: 0.34.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -262,6 +262,125 @@ LESS-FUN results to `<'."
          (t (setq left (1+ mid))))))
     result))
 
+(defun or-struktur--headline-skip-p (&optional element)
+  "Return non-nil if headeline ELEMENT matches a skip condition."
+  (when-let* ((elmt (or element (org-element-at-point))))
+    (cond
+     ((functionp or-struktur-skipped-headline)
+      (funcall or-struktur-skipped-headline elmt))
+     ((stringp or-struktur-skipped-headline)
+      (save-match-data
+        (string-match or-struktur-skipped-headline
+                      (org-element-property :raw-value elmt)))))))
+
+(defun or-struktur--headline-has-children-p ()
+  "Return non-nil if the headline at point has direct child sub-headlines."
+  (save-excursion
+    (org-back-to-heading t)
+    (org-goto-first-child)))
+
+(defun or-struktur--headline-has-body-p ()
+  "Return non-nil if headline at point has non-whitespace body text."
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((b-beg (save-excursion (org-end-of-meta-data t) (point)))
+          (b-end (save-excursion
+                   (if (re-search-forward org-outline-regexp-bol nil t)
+                       (match-beginning 0)
+                     (point-max)))))
+      (and (< b-beg b-end)
+           (string-match-p "[^ \t\n\r]"
+                           (buffer-substring-no-properties b-beg b-end))))))
+
+(defun or-struktur--headline-fold-state ()
+  "Return the fold state for the headline at point.
+Returns one of:
+  'empty      - No body and no child headlines exist
+  'folded     - Entire subtree (or body) is hidden
+  'children   - Body text is hidden, but child subheadlines are visible
+  'expanded   - Everything in the entry is visible"
+  (save-excursion
+    (org-back-to-heading t)
+    (let ((has-child (or-struktur--headline-has-children-p))
+          (has-body (or-struktur--headline-has-body-p)))
+      (cond
+       ((and (not has-child) (not has-body))
+        'empty)
+       ((not (org-fold-folded-p (line-end-position)))
+        'expanded)
+       (has-child
+        (let ((child-pos (save-excursion (org-goto-first-child) (point))))
+          (if (org-fold-folded-p child-pos)
+              'folded    ; child headline itself is inside the fold
+            'children))) ; body is folded, but child headline is visible
+       (t 'folded)))))
+
+;;; Strukturzettel (SZ) Nodes
+
+(defun or-struktur-sz-p (&optional node)
+  "Return non-nil if NODE is a SZ node.
+A SZ node is defined as an org-roam node tagged with `or-struktur-sz-tag'."
+  (when-let* ((node (or node (org-roam-node-at-point)))
+              (tags (org-roam-node-tags node)))
+    (member or-struktur-sz-tag tags)))
+
+(defun or-struktur-sz-nodes ()
+  "Get SZ nodes."
+  (seq-keep (lambda (node) (when (or-struktur-sz-p node) node))
+            (org-roam-node-list)))
+
+(defun or-struktur-sz-select ()
+  "Select strukturzettel node.
+The function calls `completing-read' to prompt for a node interactively."
+  (when-let*
+      ((options (mapcar (lambda (node)
+                          (cons (org-roam-node-title node) node))
+                        (or-struktur-sz-nodes))))
+    (if (> (length options) 1)
+        (alist-get (completing-read "Strukturzettel: " options nil t)
+                   options nil nil #'equal)
+      (cdar options))))
+
+(defun or-struktur-sz--prop-get (props key &optional default)
+  "Get value for KEY in node PROPS.
+If value is nil, returns DEFAULT."
+  (let ((key (concat "STRUKTUR_" key)))
+    (or (cdr (assoc key props)) default)))
+
+(defun or-struktur-sz--conf (node)
+  "Read the SZ config from the NODE properties, returning the starting FID."
+  (let* ((node-id (org-roam-node-id node))
+         (props (org-roam-node-properties node))
+         (start (or-struktur-sz--prop-get props "START"))
+         (fid (or (and start (mapcar #'string-to-number (string-split start)))
+                  (when-let* ((fids (or-struktur--db-id2fid-get node-id)))
+                    (when (= 1 (length fids))
+                      (car fids)))
+                  '(1))))
+    (when-let* ((v (or-struktur-sz--prop-get props "TEXT_WRAPPER")))
+      (setf (alist-get fid or-struktur-fid-text-wrapper--alist nil nil #'equal) v)
+      (setq or-struktur-fid-text-wrapper--alist (sort or-struktur-fid-text-wrapper--alist)))
+    (let (plist box)
+      (when-let* ((v (or-struktur-sz--prop-get props "FACE_FOREGROUND"))
+                  (v (if (string= v "nil") nil v)))
+        (setq plist (append plist `(:foreground ,v))))
+      (when-let* ((v (or-struktur-sz--prop-get props "FACE_BACKGROUND"))
+                  (v (if (string= v "nil") nil v)))
+        (setq plist (append plist `(:background ,v))))
+      (when-let* ((v (or-struktur-sz--prop-get props "FACE_BOX_LINE_WIDTH")))
+        (setq box (append box `(:line-width ,v))))
+      (when-let* ((v (or-struktur-sz--prop-get props "FACE_BOX_COLOR")))
+        (setq box (append box `(:color
+                                ,(pcase v
+                                   ("nil" (face-background 'default nil t))
+                                   (_ v))))))
+      (when box
+        (setq plist (append plist `(:box ,box))))
+      (when plist
+        (setf (alist-get fid or-struktur--ov-faces nil nil #'equal) plist)
+        (setq or-struktur--ov-faces (sort or-struktur--ov-faces))))
+    fid))
+
 ;;; Node ID-FID Mapping Storage
 
 ;; NOTE: The storage implementation uses a hash table. For scalability,
@@ -315,14 +434,12 @@ When EXTRA is non-nil, return also SZ ID and its buffer line number."
 
 (defun or-struktur--db-from-sz (node)
   "Update the storage mapping from the SZ NODE."
-  (let* ((file (org-roam-node-file node))
-         (pos (org-roam-node-point node))
-         (sz-id (org-roam-node-id node))
-         (fid (or-struktur--conf-from-props (org-roam-node-properties node)))
-         (fid-base-len (length fid))
-         (fdb (make-hash-table :test #'equal)))
-    (unless (and file (file-exists-p file))
-      (user-error "Node file missing or invalid: %s" file))
+  (when-let* ((file (org-roam-node-file node))
+              (pos (org-roam-node-point node))
+              (sz-id (org-roam-node-id node))
+              (fid (or-struktur-sz--conf node))
+              (fid-base-len (length fid))
+              (fdb (make-hash-table :test #'equal)))
     (with-current-buffer (find-file-noselect file)
       (org-with-wide-buffer
        (goto-char pos)
@@ -462,51 +579,6 @@ When EXTRA is non-nil, return also SZ ID and its buffer line number."
     (with-selected-window win
       (let ((buf (current-buffer)))
         (or-struktur--ov-refresh beg end buf)))))
-
-(defun or-struktur--prop-get (props key &optional default)
-  "Get value for KEY in node PROPS.
-If value is nil, returns DEFAULT."
-  (let ((key (concat "STRUKTUR_" key)))
-    (or (cdr (assoc key props)) default)))
-
-(defun or-struktur--conf-from-props (props)
-  "Read configurations from node properties PROPS."
-  (let ((start (mapcar #'string-to-number
-                       (string-split (or-struktur--prop-get props "START" "1")))))
-    (when-let* ((v (or-struktur--prop-get props "TEXT_WRAPPER")))
-      (setf (alist-get start or-struktur-fid-text-wrapper--alist nil nil #'equal) v)
-      (setq or-struktur-fid-text-wrapper--alist (sort or-struktur-fid-text-wrapper--alist)))
-    (let (plist box)
-      (when-let* ((v (or-struktur--prop-get props "FACE_FOREGROUND"))
-                  (v (if (string= v "nil") nil v)))
-        (setq plist (append plist `(:foreground ,v))))
-      (when-let* ((v (or-struktur--prop-get props "FACE_BACKGROUND"))
-                  (v (if (string= v "nil") nil v)))
-        (setq plist (append plist `(:background ,v))))
-      (when-let* ((v (or-struktur--prop-get props "FACE_BOX_LINE_WIDTH")))
-        (setq box (append box `(:line-width ,v))))
-      (when-let* ((v (or-struktur--prop-get props "FACE_BOX_COLOR")))
-        (setq box (append box `(:color
-                                ,(pcase v
-                                   ("nil" (face-background 'default nil t))
-                                   (_ v))))))
-      (when box
-        (setq plist (append plist `(:box ,box))))
-      (when plist
-        (setf (alist-get start or-struktur--ov-faces nil nil #'equal) plist)
-        (setq or-struktur--ov-faces (sort or-struktur--ov-faces))))
-    start))
-
-(defun or-struktur--headline-skip-p (&optional element)
-  "Return non-nil if headeline ELEMENT matches a skip condition."
-  (when-let* ((elmt (or element (org-element-at-point))))
-    (cond
-     ((functionp or-struktur-skipped-headline)
-      (funcall or-struktur-skipped-headline elmt))
-     ((stringp or-struktur-skipped-headline)
-      (save-match-data
-        (string-match or-struktur-skipped-headline
-                      (org-element-property :raw-value elmt)))))))
 
 ;;; FID (Folgezettel-like ID)
 
@@ -731,32 +803,6 @@ IDs are extracted from headline properties."
   (or-struktur--ov-remove beg end buffer)
   (or-struktur--ov-render beg end buffer))
 
-;;; Strukturzettel (SZ) Nodes
-
-(defun or-struktur-sz-p (&optional node)
-  "Return non-nil if NODE is a SZ node.
-A SZ node is defined as an org-roam node tagged with `or-struktur-sz-tag'."
-  (when-let* ((node (or node (org-roam-node-at-point)))
-              (tags (org-roam-node-tags node)))
-    (member or-struktur-sz-tag tags)))
-
-(defun or-struktur-sz-nodes ()
-  "Get SZ nodes."
-  (seq-keep (lambda (node) (when (or-struktur-sz-p node) node))
-            (org-roam-node-list)))
-
-(defun or-struktur-sz-select ()
-  "Select strukturzettel node.
-The function calls `completing-read' to prompt for a node interactively."
-  (when-let*
-      ((options (mapcar (lambda (node)
-                          (cons (org-roam-node-title node) node))
-                        (or-struktur-sz-nodes))))
-    (if (> (length options) 1)
-        (alist-get (completing-read "Strukturzettel: " options nil t)
-                   options nil nil #'equal)
-      (cdar options))))
-
 ;;; Nodes
 
 (defun or-struktur-node-has-fid-p (&optional node)
@@ -966,54 +1012,12 @@ The function FILTER-FN takes an FID and returns related nodes."
 
 (advice-add #'org-cycle-global :around #'or-struktur-view-cycle-global)
 
-(defun or-struktur-headline-has-children-p ()
-  "Return non-nil if the headline at point has direct child sub-headlines."
-  (save-excursion
-    (org-back-to-heading t)
-    (org-goto-first-child)))
-
-(defun or-struktur-headline-has-body-p ()
-  "Return non-nil if headline at point has non-whitespace body text."
-  (save-excursion
-    (org-back-to-heading t)
-    (let ((b-beg (save-excursion (org-end-of-meta-data t) (point)))
-          (b-end (save-excursion
-                   (if (re-search-forward org-outline-regexp-bol nil t)
-                       (match-beginning 0)
-                     (point-max)))))
-      (and (< b-beg b-end)
-           (string-match-p "[^ \t\n\r]"
-                           (buffer-substring-no-properties b-beg b-end))))))
-
-(defun or-struktur-headline-fold-state ()
-  "Return the fold state for the headline at point.
-Returns one of:
-  'empty      - No body and no child headlines exist
-  'folded     - Entire subtree (or body) is hidden
-  'children   - Body text is hidden, but child subheadlines are visible
-  'expanded   - Everything in the entry is visible"
-  (save-excursion
-    (org-back-to-heading t)
-    (let ((has-child (or-struktur-headline-has-children-p))
-          (has-body (or-struktur-headline-has-body-p)))
-      (cond
-       ((and (not has-child) (not has-body))
-        'empty)
-       ((not (org-fold-folded-p (line-end-position)))
-        'expanded)
-       (has-child
-        (let ((child-pos (save-excursion (org-goto-first-child) (point))))
-          (if (org-fold-folded-p child-pos)
-              'folded    ; child headline itself is inside the fold
-            'children))) ; body is folded, but child headline is visible
-       (t 'folded)))))
-
 (defun or-struktur-view-cycle ()
   (when (derived-mode-p 'or-struktur-view-mode)
     (when (and (org-at-heading-p) (bolp))
       (save-excursion
         (org-back-to-heading t)
-        (if (not (member (or-struktur-headline-fold-state) '(children expanded)))
+        (if (not (member (or-struktur--headline-fold-state) '(children expanded)))
             (org-fold-show-branches)
           (org-fold-subtree t)))
       t)))
