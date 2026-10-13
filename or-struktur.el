@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.34.1
+;; Version: 0.34.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -956,6 +956,8 @@ The function FILTER-FN takes an FID and returns related nodes."
                 (org-level-8 . or-struktur-level-8)))
 
   (or-struktur--hide-skipped-headlines)
+
+  (org-content)
 
   (add-hook 'org-capture-before-finalize-hook #'or-struktur-view--on-capture-before-finalize)
   (add-hook 'org-capture-after-finalize-hook #'or-struktur-view--on-capture-after-finalize))
