@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.34.3
+;; Version: 0.34.4
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -1356,7 +1356,7 @@ delay (`or-struktur-view-save-timer-delay')."
 
 (defmacro or-struktur-view-insert- (&rest body)
   `(or-struktur-view--modify-subtree
-    (let ((org-insert-heading-respect-content t)
+    (let ((org-insert-heading-respect-content nil)
           insert-action)
       (cl-flet ((on-post-insert (&rest _) (setq insert-action 'existing))
                 (on-new-node (&rest _) (setq insert-action 'capture)))
@@ -1382,13 +1382,14 @@ delay (`or-struktur-view-save-timer-delay')."
   "Insert child of current headline."
   (interactive)
   (or-struktur-view-insert-
-   (org-insert-heading)
-   (org-do-demote)))
+   (org-insert-subheading nil)))
 
 (defun or-struktur-view-insert-sibling ()
   "Insert sibling of current headline."
   (interactive)
   (or-struktur-view-insert-
+   (org-back-to-heading t)
+   (end-of-line)
    (org-insert-heading)))
 
 (defun or-struktur-view-do-headline-demote ()
