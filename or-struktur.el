@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.34.4
+;; Version: 0.35.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -329,17 +329,22 @@ A SZ node is defined as an org-roam node tagged with `or-struktur-sz-tag'."
   (seq-keep (lambda (node) (when (or-struktur-sz-p node) node))
             (org-roam-node-list)))
 
+(defun or-struktur--completing-read (prompt options)
+  "Select an entry from OPTIONS.
+Each option in OPTIONS is a cons cell `(display . item)'. The function
+calls `completing-read' to PROMPT the user interactively."
+  (if (> (length options) 1)
+      (alist-get (completing-read prompt options nil t)
+                 options nil nil #'equal)
+    (cdar options)))
+
 (defun or-struktur-sz-select ()
   "Select strukturzettel node.
 The function calls `completing-read' to prompt for a node interactively."
-  (when-let*
-      ((options (mapcar (lambda (node)
-                          (cons (org-roam-node-title node) node))
-                        (or-struktur-sz-nodes))))
-    (if (> (length options) 1)
-        (alist-get (completing-read "Strukturzettel: " options nil t)
-                   options nil nil #'equal)
-      (cdar options))))
+  (or-struktur--completing-read "Strukturzettel: "
+                                (mapcar (lambda (node)
+                                          (cons (org-roam-node-title node) node))
+                                        (or-struktur-sz-nodes))))
 
 (defun or-struktur-sz--prop-get (props key &optional default)
   "Get value for KEY in node PROPS.
@@ -1684,11 +1689,19 @@ precedence:
                       (car (split-string (org-element-property :path elmt) "::" t))))
                   (org-roam-node-id node)))
              (items (or-struktur-fid--from-id node-id t))
-             (matched (or (cl-find-if (pcase-lambda (`(,_ ,sz-id ,_))
+             (matched (or (cl-find-if (pcase-lambda (`(,fid ,sz-id ,_))
                                         (and win (or-struktur-view--shown-p sz-id)))
                                       items)
-                          (car items))))
-          (pcase-let* ((`(,_ ,sz-id ,line-no) matched))
+                          (or-struktur--completing-read
+                           "Strukturzettel: "
+                           (mapcar (pcase-lambda (`(,fid ,sz-id ,line-no))
+                                     (cons (format "%s - %s"
+                                                   (org-roam-node-title
+                                                    (org-roam-node-from-id sz-id))
+                                                   (or-struktur-fid--render fid))
+                                           `(,fid ,sz-id ,line-no)))
+                                   items)))))
+          (pcase-let* ((`(,fid ,sz-id ,line-no) matched))
             (setq sz-node (org-roam-node-from-id sz-id)
                   sz-line line-no
                   target-id sz-id)))))
