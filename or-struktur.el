@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.35.1
+;; Version: 0.36.1
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -35,6 +35,8 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'seq)
+
 (require 'org-roam)
 
 (defgroup or-struktur nil
@@ -75,6 +77,17 @@ Examples:
     rest alternating).
   - (\"%d\" \"-%s\") will render like '2-d3a1' (second digit preceded by a
     hyphen, with the rest alternating)."
+  :type '(list string)
+  :group 'or-struktur)
+
+(defcustom or-struktur-headline-hidden nil
+  "Regexp or function returning non-nil for hidden headlines."
+  :type '(choice (string :tag "Regexp matching headline text")
+                 (function :tag "Function taking headline element as argument"))
+  :group 'or-struktur)
+
+(defcustom or-struktur-headline-hidden-tags nil
+  "List of headline tags marking hidden trees."
   :type '(list string)
   :group 'or-struktur)
 
@@ -179,8 +192,6 @@ Either nil or `minibuffer' is allowed."
 
 (defvar or-struktur-fid-text-wrapper--alist nil)
 
-(defvar or-struktur-skipped-headline nil)
-
 ;;; Utilities
 
 (defmacro or-struktur--debounce (delay &rest body)
@@ -262,24 +273,27 @@ LESS-FUN results to `<'."
          (t (setq left (1+ mid))))))
     result))
 
-(defun or-struktur--headline-skip-p (&optional element)
+(defun or-struktur-headline--hidden-p (element)
   "Return non-nil if headeline ELEMENT matches a skip condition."
-  (when-let* ((elmt (or element (org-element-at-point))))
+  (when-let* ((elmt element))
     (cond
-     ((functionp or-struktur-skipped-headline)
-      (funcall or-struktur-skipped-headline elmt))
-     ((stringp or-struktur-skipped-headline)
+     ((functionp or-struktur-headline-hidden)
+      (funcall or-struktur-headline-hidden elmt))
+     ((stringp or-struktur-headline-hidden)
       (save-match-data
-        (string-match or-struktur-skipped-headline
-                      (org-element-property :raw-value elmt)))))))
+        (string-match or-struktur-headline-hidden
+                      (org-element-property :raw-value elmt))))
+     (or-struktur-headline-hidden-tags
+      (seq-intersection or-struktur-headline-hidden-tags
+                        (org-element-property :tags elmt))))))
 
-(defun or-struktur--headline-has-children-p ()
+(defun or-struktur-headline--has-children-p ()
   "Return non-nil if the headline at point has direct child sub-headlines."
   (save-excursion
     (org-back-to-heading t)
     (org-goto-first-child)))
 
-(defun or-struktur--headline-has-body-p ()
+(defun or-struktur-headline--has-body-p ()
   "Return non-nil if headline at point has non-whitespace body text."
   (save-excursion
     (org-back-to-heading t)
@@ -292,7 +306,7 @@ LESS-FUN results to `<'."
            (string-match-p "[^ \t\n\r]"
                            (buffer-substring-no-properties b-beg b-end))))))
 
-(defun or-struktur--headline-fold-state ()
+(defun or-struktur-headline--fold-state ()
   "Return the fold state for the headline at point.
 Returns one of:
   'empty      - No body and no child headlines exist
@@ -301,8 +315,8 @@ Returns one of:
   'expanded   - Everything in the entry is visible"
   (save-excursion
     (org-back-to-heading t)
-    (let ((has-child (or-struktur--headline-has-children-p))
-          (has-body (or-struktur--headline-has-body-p)))
+    (let ((has-child (or-struktur-headline--has-children-p))
+          (has-body (or-struktur-headline--has-body-p)))
       (cond
        ((and (not has-child) (not has-body))
         'empty)
@@ -469,7 +483,7 @@ When EXTRA is non-nil, return also SZ ID and its buffer line number."
                    (_ (if (and skip-subtree-level (> level skip-subtree-level))
                           nil
                         (not (setq skip-subtree-level
-                                   (and (or-struktur--headline-skip-p elmt)
+                                   (and (or-struktur-headline--hidden-p elmt)
                                         level)))))
                    (title-str (if (stringp raw-title)
                                   raw-title
@@ -963,7 +977,7 @@ The function FILTER-FN takes an FID and returns related nodes."
                 (org-level-7 . or-struktur-level-7)
                 (org-level-8 . or-struktur-level-8)))
 
-  (or-struktur--hide-skipped-headlines)
+  (or-struktur-view--hide-headlines)
 
   (org-content)
 
@@ -975,10 +989,10 @@ The function FILTER-FN takes an FID and returns related nodes."
 (defvar-local or-struktur--hidden-subtree-spec 'or-struktur-hidden-subtree
   "Invisibility spec for skipped subtrees.")
 
-(defun or-struktur--hide-skipped-headlines ()
+(defun or-struktur-view--hide-headlines ()
   (org-map-entries
    (lambda ()
-     (when (or-struktur--headline-skip-p)
+     (when (or-struktur-headline--hidden-p (org-element-at-point))
        (save-excursion
          (org-back-to-heading t)
          (message "Not a strukturzettel headline: %s"
@@ -999,7 +1013,9 @@ The function FILTER-FN takes an FID and returns related nodes."
              ;;              (lambda (ov) (delete-overlay ov)))
 
              (overlay-put ov 'line-prefix "")
-             (overlay-put ov 'wrap-prefix ""))))))))
+             (overlay-put ov 'wrap-prefix ""))))))
+   (when or-struktur-headline-hidden-tags
+     (string-join or-struktur-headline-hidden-tags "|"))))
 
 (defun or-struktur-view-cycle-global (fun &rest _args)
   (cond
@@ -1027,7 +1043,7 @@ The function FILTER-FN takes an FID and returns related nodes."
     (when (and (org-at-heading-p) (bolp))
       (save-excursion
         (org-back-to-heading t)
-        (if (not (member (or-struktur--headline-fold-state) '(children expanded)))
+        (if (not (member (or-struktur-headline--fold-state) '(children expanded)))
             (org-fold-show-branches)
           (org-fold-subtree t)))
       t)))
