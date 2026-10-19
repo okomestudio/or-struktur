@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.36.1
+;; Version: 0.36.2
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -340,7 +340,11 @@ A SZ node is defined as an org-roam node tagged with `or-struktur-sz-tag'."
 
 (defun or-struktur-sz-nodes ()
   "Get SZ nodes."
-  (seq-keep (lambda (node) (when (or-struktur-sz-p node) node))
+  (seq-keep (lambda (node)
+              (when (and (or-struktur-sz-p node)
+                         (not (member (org-roam-node-title node)
+                                      (org-roam-node-aliases node))))
+                node))
             (org-roam-node-list)))
 
 (defun or-struktur--completing-read (prompt options)
