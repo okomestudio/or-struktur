@@ -4,7 +4,7 @@
 ;;
 ;; Author: Taro Sato <okomestudio@gmail.com>
 ;; URL: https://github.com/okomestudio/or-struktur
-;; Version: 0.36.2
+;; Version: 0.36.3
 ;; Keywords: org-roam, convenience
 ;; Package-Requires: ((emacs "30.1") (org "9.8.10") (org-roam "2.3.1"))
 ;;
@@ -1407,6 +1407,7 @@ delay (`or-struktur-view-save-timer-delay')."
   "Insert child of current headline."
   (interactive)
   (or-struktur-view-insert-
+   (org-back-to-heading t)
    (org-insert-subheading nil)))
 
 (defun or-struktur-view-insert-sibling ()
